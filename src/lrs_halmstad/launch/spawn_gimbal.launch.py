@@ -1,3 +1,4 @@
+import os
 #import logging
 #logging.root.setLevel(logging.DEBUG)
 from launch import LaunchDescription
@@ -5,7 +6,7 @@ from launch.actions import DeclareLaunchArgument, RegisterEventHandler
 from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 from launch.substitutions import ThisLaunchFileDir, LaunchConfiguration
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_share_directory, get_package_prefix
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_path
@@ -44,6 +45,12 @@ def generate_launch_description():
     R = LaunchConfiguration('R')
     P = LaunchConfiguration('P')
     Y = LaunchConfiguration('Y')
+    generate_sdf_exe = os.path.join(
+        get_package_prefix('lrs_halmstad'),
+        'lib',
+        'lrs_halmstad',
+        'generate_sdf',
+    )
 
     spawn_node = Node(
             package="ros_gz_sim",
@@ -56,7 +63,7 @@ def generate_launch_description():
 #                '-topic', ['/', LaunchConfiguration('name'), '/robot_description']
 #                '-file', LaunchConfiguration('model'),
 #                '-file', "/tmp/gen.sdf",
-                '-string', Command(["ros2 run lrs_halmstad", " ", "generate_sdf", " ", "--ros-args", " -p type:=", LaunchConfiguration('type'), " -p robot_name:=", LaunchConfiguration('name'), " -p camera_name:=", LaunchConfiguration('camera_name'), " -p gimbal:=True", " -p camera_update_rate:=", LaunchConfiguration('camera_update_rate')]),
+                '-string', Command([generate_sdf_exe, " ", "--ros-args", " -p type:=", LaunchConfiguration('type'), " -p robot_name:=", LaunchConfiguration('name'), " -p camera_name:=", LaunchConfiguration('camera_name'), " -p gimbal:=True", " -p camera_update_rate:=", LaunchConfiguration('camera_update_rate')]),
                 '-x', LaunchConfiguration('x'),
                 '-y', LaunchConfiguration('y'),
                 '-z', LaunchConfiguration('z'),
@@ -96,4 +103,3 @@ def generate_launch_description():
         spawn_node,
         bridge
     ])
-

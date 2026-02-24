@@ -4,6 +4,7 @@ from rclpy.node import Node
 import xacro
 from ament_index_python.packages import get_package_share_path
 
+
 class GenSdf(Node):
     def __init__(self):
         super().__init__("gen_sdf")
@@ -110,9 +111,7 @@ class GenSdf(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-
     node = GenSdf()
-
     res = node.process()
 
     #f = open("/tmp/gen.sdf", "w")

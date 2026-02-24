@@ -1,10 +1,11 @@
+import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler
 from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 from launch.substitutions import ThisLaunchFileDir, LaunchConfiguration
 from launch.substitutions import PythonExpression
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_share_directory, get_package_prefix
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_path
@@ -50,6 +51,13 @@ def generate_launch_description():
         "'true' if '", LaunchConfiguration('uav_mode'), "' == 'physics' else 'false'"
     ])
 
+    generate_sdf_exe = os.path.join(
+        get_package_prefix('lrs_halmstad'),
+        'lib',
+        'lrs_halmstad',
+        'generate_sdf',
+    )
+
     spawn_node = Node(
             package="ros_gz_sim",
             executable='create',
@@ -62,7 +70,7 @@ def generate_launch_description():
 #                '-file', LaunchConfiguration('model'),
 #                '-file', "/tmp/gen.sdf",
                 '-string', Command([
-                    "ros2 run lrs_halmstad", " ", "generate_sdf", " ", "--ros-args",
+                    generate_sdf_exe, " ", "--ros-args",
                     " -p type:=", LaunchConfiguration('type'),
                     " -p name:=", LaunchConfiguration('name'),
                     " -p robot:=True",
