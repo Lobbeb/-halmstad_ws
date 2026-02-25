@@ -4,91 +4,6 @@ Status
 ------
 This repository is a source-only snapshot of the Halmstad Stage-1 robotics testbed (ROS 2 Jazzy + Gazebo). It intentionally excludes build artifacts, runtime outputs, and virtual environments so it stays lightweight and clone-ready.
 
-Table of contents
------------------
-- Overview
-- Repository layout
-- Prerequisites
-- Quickstart (one-command bootstrap)
-- Manual setup steps (detailed)
-- Running experiments
-- Important internal tooling
-- Recommended development workflow
-- VS Code / Pylance tips
-- Branching / pushing notes
-- Troubleshooting
-- License & contact
-
-Overview
---------
-This workspace contains:
-- Simulation and experiment orchestration (scripts/run_round.sh)
-- A ROS 2 package `lrs_halmstad` with launch files, utilities and small nodes (contract checks, event relay)
-- Optional OMNeT++ bridge (if present)
-- Helpers and documentation to reproduce experiments on another machine
-
-Goal: clone this repo on a new machine, run a single bootstrap script and be able to build and run experiments with minimal manual setup.
-
-Prerequisites (host machine)
-----------------------------
-- Ubuntu or WSL Ubuntu (recommended; instructions assume WSL/Ubuntu)
-- Python 3.10+ (system Python)
-- ROS 2 Jazzy installed via apt (rclpy and ROS libs come from apt packages)
-- colcon build tools (colcon-cli, colcon-common-extensions)
-- git, rsync (for export workflows), rosdep
-- Optional: Gazebo version compatible with installed ROS 2 distro if running simulations
-
-Quickstart — one command (after cloning)
-----------------------------------------
-1. Clone:
-```bash
-git clone https://github.com/Lobbeb/halmstad_ws.git
-cd ~/halmstad_ws
-```
-
-
-2. Source overlays (if not already sourced by the bootstrap script):
-```bash
-source /opt/ros/jazzy/setup.bash
-colcon build --packages-selected lrs_halmstad --symlink-install
-source install/setup.bash
-```
-
-3. Run experiments or utilities (examples below).
-
-requirements.txt (pip-only)
----------------------------
-This file contains only pip-installable Python libraries used by scripts (not rclpy).
-Add extra pip packages used in analysis scripts (numpy, pandas, matplotlib) if required.
-
-Manual setup steps (detailed)
-----------------------------
-If prefer to run steps yourself:
-
-1. Install ROS 2 Jazzy (follow ROS docs).  
-2. On WSL Ubuntu, ensure Distro and OpenGL setup for Gazebo (if using GPU passthrough).  
-3. From workspace root:
-```bash
-# source ROS system
-source /opt/ros/jazzy/setup.bash
-
-# optional: create & activate venv
-python3 -m venv .venv
-source .venv/bin/activate
-
-# pip deps
-python -m pip install -U pip
-python -m pip install -r requirements.txt
-
-# ros dependencies
-rosdep update
-rosdep install --from-paths src --ignore-src -r -y
-
-# build
-colcon build --symlink-install
-source install/setup.bash
-```
-
 Running experiments (current runbook)
 -------------------------------------
 This section documents the commands currently used to run the Halmstad Gazebo + ROS 2 simulation stack, spawn UAVs, start movement/follow logic, and start the OMNeT TCP bridge.
@@ -141,11 +56,13 @@ ros2 launch lrs_halmstad run_round_motion.launch.py
 ros2 run lrs_halmstad gazebo_pose_tcp_bridge
 ```
 
-5. Optional checks:
+5. Optional checks: Visualizing lidar of Husky in Rviz2
 ```bash
-ros2 topic list -t --no-daemon
-ros2 topic echo /coord/leader_estimate_status
-ros2 topic hz /dji0/camera0/image_raw
+rviz2 -d ~/halmstad_ws/src/lrs_halmstad/clearpath/husky.rviz --ros-args -r /tf:=/a201_0000/tf -r /tf_static:=/a201_0000/tf_static -p use_sim_time:=true
+```
+6. View camera feed (images) of UGV and UAV
+```bash
+ros2 run  rqt_image_view rqt_image_view dummy
 ```
 
 Gazebo + UGV simulation (GUI)
@@ -230,7 +147,7 @@ YOLO estimate mode (UAV follows UGV estimate from camera detections):
 ```bash
 ros2 launch lrs_halmstad run_round_follow_motion.launch.py \
   world:=orchard uav_name:=dji0 leader_mode:=estimate \
-  yolo_weights:=/home/ruben/halmstad_ws/models/yolov5n.pt yolo_device:=cpu
+  yolo_weights:=$HOME/halmstad_ws/models/yolov5n.pt yolo_device:=cpu
 ```
 
 `run_round_follow_motion.launch.py` arguments:
@@ -246,7 +163,7 @@ ros2 launch lrs_halmstad run_round_follow_motion.launch.py \
 - `leader_camera_info_topic:=<topic>` (default `/<uav_name>/camera0/camera_info`)
 - `leader_depth_topic:=<topic>` (default empty / disabled)
 - `leader_uav_pose_topic:=<topic>` (default `/<uav_name>/pose_cmd`)
-- `yolo_weights:=<weights.pt>` (default `/home/ruben/halmstad_ws/models/yolov5n.pt`)
+- `yolo_weights:=<weights.pt>` (default `$HOME/halmstad_ws/models/yolov5n.pt`)
 - `yolo_device:=cpu|cuda` (default `cpu`)
 - `event_topic:=<topic>` (default `/coord/events`)
 - `ugv_start_delay_s:=<seconds>` (default `0.0`; readiness gate handles startup)
@@ -311,58 +228,17 @@ ros2 run lrs_halmstad pose_cmd_to_odom
 - `child_frame_id:=<frame>` (default `base_link`)
 - `copy_header_stamp:=true|false` (default `true`)
 
-Legacy script-based round runner
---------------------------------
-The old orchestration script still exists (`scripts/run_round.sh`), but this README intentionally documents the ROS2-native `ros2 launch` / `ros2 run` commands above for day-to-day use.
-
-Key nodes and scripts
----------------------
-- scripts/run_round.sh — orchestrates rosbag recording, publishes event markers, runs sweeps.
-- src/lrs_halmstad/lrs_halmstad/coord_event_relay.py — relay node: publish to /coord/events_cmd, node republishes reliably to /coord/events (prevents missed markers in bag).
-- src/lrs_halmstad/lrs_halmstad/contract_check.py — pre-run contract check used by scripts/run_round.sh to assert required topics/services are present.
-- scripts/uav_setpose_sweep.py — drives UAV set_pose sequences (verify this script is persistent rclpy process on your machine).
-
 Design recommendations preserved here
 ------------------------------------
 - Keep build artifacts out of Git (build/, install/, log/).
 - Keep runtime data out of Git (runs/, bags, large binary outputs).
 - Keep the repo source-only and reproducible by rosdep + colcon.
 
-Git & repo notes (how this snapshot was made)
----------------------------------------------
-- The repository was created by exporting a clean copy of an existing workspace (no nested .git folders were copied).
-- The workspace root here is intended to be the Git root (`~/halmstad_ws` after clone).
-
-If starting from an existing workspace with nested package-level repositories:
-- Option A (used here): export a clean copy without nested `.git` and commit as a monorepo snapshot.
-- Option B (preserve history): convert inner repos to submodules or use `git subtree` to preserve history (more advanced).
-
-VS Code / Pylance tips
----------------------
-If VS Code shows "Import 'rclpy' could not be resolved":
-
-- Start VS Code from an environment with ROS 2 sourced:
-```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-code .
-```
-- Or add extraPaths in `.vscode/settings.json`:
-```json
-{
-  "python.analysis.extraPaths": [
-    "/opt/ros/jazzy/lib/python3.10/site-packages",
-    "${workspaceFolder}/install/**/lib/python3.10/site-packages"
-  ]
-}
-```
-Adjust Python path version (3.10) to your system Python.
-
 Git push guidance
 -----------------
 To push to your GitHub repo and overwrite a remote branch safely:
 ```bash
-git remote add origin https://github.com/Lobbeb/Master_Thesis.git
+git remote add origin https://github.com/Lobbeb/halmstad_ws.git
 git branch -M main
 git push --force-with-lease -u origin main
 ```
@@ -380,35 +256,3 @@ Security & large files
 ----------------------
 - Do not commit `install/`, `build/`, `log/` or binary bags — they bloat the repo.
 - Use Git LFS only if very large binary artifacts must be versioned.
-
-Recommended workflow for laptop (recover exact state quickly)
-------------------------------------------------------------
-1. Clone:
-```bash
-git clone https://github.com/Lobbeb/Master_Thesis.git ~/halmstad_ws
-cd ~/halmstad_ws
-```
-2. Bootstrap:
-```bash
-bash scripts/bootstrap_ws.sh
-```
-3. Source and run experiments:
-```bash
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-bash scripts/run_round.sh run001 baseline a201_0000 orchard_world
-```
-
-License
--------
-Add a license file appropriate for the project (MIT suggested if permissive sharing is desired).
-
-Contact / Handoff
------------------
-Use issues or repository PRs for any follow-ups. For urgent local help, run the bootstrap script and attach logs from `colcon` (command + failing package logs).
-
-Change log (snapshot notes)
----------------------------
-- This repository is a snapshot intended for portability. It contains source and utilities required to reproduce Stage-1 experiments; build products and runtime outputs are intentionally excluded.
-
-End of file.
