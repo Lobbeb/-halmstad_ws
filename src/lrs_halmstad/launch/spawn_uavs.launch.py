@@ -8,8 +8,7 @@ from launch.actions import IncludeLaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PythonExpression
+from launch.substitutions import LaunchConfiguration
 
 
 world_arg = DeclareLaunchArgument('world', default_value='orchard',
@@ -26,9 +25,6 @@ uav_mode_arg = DeclareLaunchArgument('uav_mode', default_value='teleport',
                       description='UAV mode: teleport (deterministic) or physics')
 
 def generate_launch_description():
-    teleport_cond = IfCondition(PythonExpression(["'", LaunchConfiguration('uav_mode'), "' == 'teleport'"]))
-    physics_cond = IfCondition(PythonExpression(["'", LaunchConfiguration('uav_mode'), "' == 'physics'"]))
-    
     dji0 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -37,6 +33,7 @@ def generate_launch_description():
         launch_arguments={"name": "dji0",
                           "type": "m100",
                           "uav_mode": LaunchConfiguration('uav_mode'),
+                          "with_camera": "true",
                           "camera_name": "camera0",
                           "z": "2.27",
                           "world": LaunchConfiguration('world')
@@ -52,6 +49,7 @@ def generate_launch_description():
         launch_arguments={"name": "dji1",
                           "type": "m100",
                           "uav_mode": LaunchConfiguration('uav_mode'),
+                          "with_camera": "true",
                           "camera_name": "camera0",
                           "z": "3.27",
                           "world": LaunchConfiguration('world'),
@@ -66,55 +64,11 @@ def generate_launch_description():
         launch_arguments={"name": "dji2",
                           "type": "m100",
                           "uav_mode": LaunchConfiguration('uav_mode'),
+                          "with_camera": "true",
                           "camera_name": "camera0",
                           "z": "4.27",
                           "world": LaunchConfiguration('world'),
                           }.items(),
-    )
-    
-    dji0gimbal = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('lrs_halmstad'),
-                'spawn_gimbal.launch.py')),
-        launch_arguments={
-            "name": "dji0",
-            "camera_name": "camera0",
-            "type": "m100",
-            "z": "2.0",
-            "world": LaunchConfiguration('world'),
-        }.items(),
-        condition=teleport_cond,
-    )
-
-    dji1gimbal = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('lrs_halmstad'),
-                'spawn_gimbal.launch.py')),
-        launch_arguments={
-            "name": "dji1",
-            "camera_name": "camera0",
-            "type": "m100",
-            "z": "3.0",
-            "world": LaunchConfiguration('world'),
-        }.items(),
-        condition=teleport_cond,
-    )
-
-    dji2gimbal = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('lrs_halmstad'),
-                'spawn_gimbal.launch.py')),
-        launch_arguments={
-            "name": "dji2",
-            "camera_name": "camera0",
-            "type": "m100",
-            "z": "4.0",
-            "world": LaunchConfiguration('world'),
-        }.items(),
-        condition=teleport_cond,
     )
 
     bridge = Node(
@@ -139,7 +93,6 @@ def generate_launch_description():
             '/dji2/camera0/camera_info@sensor_msgs/msg/CameraInfo@ignition.msgs.CameraInfo',
         ],
         output='screen',
-        condition=physics_cond
     )
     
     
@@ -149,9 +102,6 @@ def generate_launch_description():
         bridge,
         camera_bridge,
         dji0,
-        dji0gimbal,
         dji1,
-        dji1gimbal,
         dji2,
-        dji2gimbal,
     ])
