@@ -64,6 +64,7 @@ class ContractChecker(Node):
         missing_services = set()
 
         event_topic = os.environ.get("EVENT_TOPIC", "/coord/events").strip() or "/coord/events"
+        actuation_backend = os.environ.get("ACTUATION_BACKEND", "gazebo").strip().lower() or "gazebo"
         require_flow = self._truthy_env("REQUIRE_FLOW", "0")
         cmd_topics_csv = os.environ.get("UGV_CMD_TOPICS", "/a201_0000/cmd_vel,/a201_0000/platform/cmd_vel")
         flow_topics_csv = os.environ.get("REQUIRED_FLOW_TOPICS", "/a201_0000/platform/odom")
@@ -74,7 +75,14 @@ class ContractChecker(Node):
         if event_topic != "/coord/events":
             required_topics.append("/coord/events")
 
-        required_services = [s.format(world=world) for s in REQUIRED_SERVICES]
+        required_services = []
+        if actuation_backend == "gazebo":
+            required_services = [s.format(world=world) for s in REQUIRED_SERVICES]
+        elif actuation_backend != "px4":
+            self.get_logger().warn(
+                f"Unknown ACTUATION_BACKEND={actuation_backend!r}; defaulting contract service checks to gazebo"
+            )
+            required_services = [s.format(world=world) for s in REQUIRED_SERVICES]
 
         if require_flow and flow_topics:
             self._setup_flow_subscriptions(flow_topics)

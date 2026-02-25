@@ -45,6 +45,7 @@ UGV_ODOM_TOPIC="${UGV_ODOM_TOPIC:-/a201_0000/platform/odom}"
 UGV_CMD_VEL_TOPIC="${UGV_CMD_VEL_TOPIC:-/a201_0000/cmd_vel}"
 UGV_CMD_TOPICS="${UGV_CMD_TOPICS:-/a201_0000/cmd_vel,/a201_0000/platform/cmd_vel}"
 REQUIRE_FLOW="${REQUIRE_FLOW:-1}"
+ACTUATION_BACKEND="${ACTUATION_BACKEND:-gazebo}"
 NODE_SUFFIX="$(echo "$RUN_ID" | tr -c '[:alnum:]_' '_')"
 YOLO_WEIGHTS="${YOLO_WEIGHTS:-}"
 YOLO_DEVICE="${YOLO_DEVICE:-cpu}"
@@ -229,6 +230,7 @@ auto_select_ugv_odom_topic
 
 export EVENT_TOPIC
 export REQUIRE_FLOW
+export ACTUATION_BACKEND
 export UGV_CMD_TOPICS
 export UGV_CMD_VEL_TOPIC
 export REQUIRED_FLOW_TOPICS="$UGV_ODOM_TOPIC"
@@ -309,6 +311,7 @@ condition: ${CONDITION}
 world: ${WORLD}
 uav_name: ${UAV}
 with_cameras: ${WITH_CAMERAS}
+actuation_backend: "${ACTUATION_BACKEND}"
 leader_mode: "${LEADER_MODE}"
 leader_perception_enable: ${LEADER_PERCEPTION_ENABLE}
 follow_profile_requested: "${FOLLOW_PROFILE}"
@@ -480,7 +483,7 @@ if [ "$CONDITION" = "follow" ]; then
     echo "[run_round] LEADER_MODE=$LEADER_MODE and LEADER_PERCEPTION_ENABLE=$LEADER_PERCEPTION_ENABLE -> not starting leader_estimator"
   fi
 
-  echo "[run_round] Starting follow_uav (leader_mode=$LEADER_MODE, follow_profile=$FOLLOW_PROFILE_RESOLVED)"
+  echo "[run_round] Starting follow_uav (leader_mode=$LEADER_MODE, actuation_backend=$ACTUATION_BACKEND, follow_profile=$FOLLOW_PROFILE_RESOLVED)"
   ros2 run lrs_halmstad follow_uav --ros-args \
     -r __node:=follow_uav_${NODE_SUFFIX} \
     -p use_sim_time:=true \
@@ -489,6 +492,7 @@ if [ "$CONDITION" = "follow" ]; then
     -p leader_input_type:="$LEADER_MODE" \
     -p leader_odom_topic:="$UGV_ODOM_TOPIC" \
     -p leader_pose_topic:=/coord/leader_estimate \
+    -p actuation_backend:="$ACTUATION_BACKEND" \
     -p tick_hz:="$FOLLOW_TICK_HZ" \
     -p d_target:=5.0 \
     -p d_max:=15.0 \

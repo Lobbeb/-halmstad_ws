@@ -89,6 +89,7 @@ class FollowUav(Node):
         self.declare_parameter("leader_input_type", "odom")
         self.declare_parameter("leader_odom_topic", "/a201_0000/platform/odom/filtered")
         self.declare_parameter("leader_pose_topic", "/coord/leader_estimate")
+        self.declare_parameter("actuation_backend", "gazebo")
 
         self.declare_parameter("tick_hz", 5.0, dyn_num)
         self.declare_parameter("d_target", 5.0)
@@ -143,11 +144,14 @@ class FollowUav(Node):
         self.leader_input_type = str(self.get_parameter("leader_input_type").value).strip().lower()
         self.leader_odom_topic = str(self.get_parameter("leader_odom_topic").value)
         self.leader_pose_topic = str(self.get_parameter("leader_pose_topic").value)
+        self.actuation_backend = str(self.get_parameter("actuation_backend").value).strip().lower()
 
         if self.leader_input_type == "estimate":
             self.leader_input_type = "pose"
         if self.leader_input_type not in ("odom", "pose"):
             raise ValueError("leader_input_type must be 'odom', 'pose', or 'estimate'")
+        if self.actuation_backend not in ("gazebo", "px4"):
+            raise ValueError("actuation_backend must be 'gazebo' or 'px4'")
 
         self.tick_hz = float(self.get_parameter("tick_hz").value)
         self.d_target = float(self.get_parameter("d_target").value)
@@ -324,18 +328,25 @@ class FollowUav(Node):
             Float32, f"{self.metrics_prefix}/follow_tracking_error_cmd", 10
         )
 
-        srv_name = f"/world/{self.world}/set_pose"
-        self.cli = self.create_client(SetEntityPose, srv_name)
-        self.get_logger().info(f"[follow_uav] Waiting for service: {srv_name}")
-        while not self.cli.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("[follow_uav] Service not available, waiting again...")
+        self.cli = None
+        if self.actuation_backend == "gazebo":
+            srv_name = f"/world/{self.world}/set_pose"
+            self.cli = self.create_client(SetEntityPose, srv_name)
+            self.get_logger().info(f"[follow_uav] Waiting for service: {srv_name}")
+            while not self.cli.wait_for_service(timeout_sec=1.0):
+                self.get_logger().info("[follow_uav] Service not available, waiting again...")
+        else:
+            self.get_logger().info(
+                "[follow_uav] actuation_backend=px4 (dry mode for Phase 1): "
+                "skipping Gazebo /world/<world>/set_pose client"
+            )
 
         dt = 1.0 / self.tick_hz
         self.timer = self.create_timer(dt, self.on_tick)
 
         self.get_logger().info(
             f"[follow_uav] Started: world={self.world}, uav={self.uav_name}, "
-            f"leader_input={leader_desc}, tick={self.tick_hz}Hz, "
+            f"leader_input={leader_desc}, actuation_backend={self.actuation_backend}, tick={self.tick_hz}Hz, "
             f"d_target={self.d_target}, d_max={self.d_max}, z={self.z_alt}, "
             f"pose_timeout_s={self.pose_timeout_s}, min_cmd_period_s={self.min_cmd_period_s}, "
             f"smooth_alpha={self.smooth_alpha}, max_step_m_per_tick={self.max_step_m_per_tick}, "
@@ -671,6 +682,12 @@ class FollowUav(Node):
         return dt >= self.min_cmd_period_s
 
     def set_entity_pose_async(self, entity_name: str, x: float, y: float, z: float, yaw_rad: float):
+        if self.actuation_backend != "gazebo":
+            # Phase 1 seam: preserve /pose_cmd publication and controller timing while
+            # skipping Gazebo actuation in px4 backend mode.
+            self.pending_future = None
+            return
+
         req = SetEntityPose.Request()
         req.entity.id = 0
         req.entity.name = entity_name
