@@ -21,6 +21,9 @@ class GenSdf(Node):
         self.declare_parameter("with_camera", False)
         self.with_camera = self.get_parameter('with_camera').get_parameter_value().bool_value
 
+        self.declare_parameter("model_static", False)
+        self.model_static = self.get_parameter('model_static').get_parameter_value().bool_value
+
         self.declare_parameter("camera_name", "camera0")
         self.camera_name = self.get_parameter('camera_name').get_parameter_value().string_value
 
@@ -75,6 +78,7 @@ class GenSdf(Node):
         if self.robot_gimbal:
             mappings["robot_name"] = self.name
             mappings["camera_name"] = self.camera_name
+            mappings["model_static"] = "true" if self.model_static else "false"
             if self.with_camera:
                 mappings["with_camera"] = "true"
             else:

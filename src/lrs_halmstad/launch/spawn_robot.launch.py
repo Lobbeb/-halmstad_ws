@@ -2,6 +2,7 @@ import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler
 from launch.event_handlers import OnProcessExit
+from launch.conditions import IfCondition
 from launch_ros.actions import Node
 from launch.substitutions import ThisLaunchFileDir, LaunchConfiguration
 from launch.substitutions import PythonExpression
@@ -17,19 +18,19 @@ import launch_ros
 def generate_launch_description():
     urdf_path = get_package_share_path('lrs_halmstad') / 'urdf'
     sdf_path = get_package_share_path('lrs_halmstad') / 'sdf'
-    default_urdf_model_path = urdf_path / 'lrs_piraya.urdf.xacro'
-    default_sdf_model_path = sdf_path / 'lrs_piraya.sdf'
+    default_urdf_model_path = urdf_path / 'lrs_camera.urdf.xacro'
+    default_sdf_model_path = sdf_path / 'lrs_camera.sdf'
 
     world_arg = DeclareLaunchArgument(name='world', default_value='empty',
                                       description='World to spawn in')
     
-    name_arg = DeclareLaunchArgument(name='name', default_value='piraya0',
+    name_arg = DeclareLaunchArgument(name='name', default_value='m100',
                                      description='Name of model')
     
     model_arg = DeclareLaunchArgument(name='model', default_value=str(default_sdf_model_path),
                                       description='Absolute path to robot file')
 
-    type_arg = DeclareLaunchArgument(name='type', default_value="piraya",
+    type_arg = DeclareLaunchArgument(name='type', default_value="m100",
                                      description='Type of model')
     
     uav_mode_arg = DeclareLaunchArgument(name='uav_mode', default_value="teleport",
@@ -37,6 +38,12 @@ def generate_launch_description():
 
     with_camera_arg = DeclareLaunchArgument(name='with_camera', default_value="false",
                                             description='Attach camera/gimbal to the model')
+
+    bridge_camera_arg = DeclareLaunchArgument(
+        name='bridge_camera',
+        default_value="false",
+        description='Bridge /<name>/<camera_name> image + camera_info topics to ROS'
+    )
     
     camera_name_arg = DeclareLaunchArgument(name='camera_name', default_value="camera0",
                                             description='Attached camera name')
@@ -47,8 +54,17 @@ def generate_launch_description():
     R = LaunchConfiguration('R')
     P = LaunchConfiguration('P')
     Y = LaunchConfiguration('Y')
+    # Historical behavior attached camera automatically in physics mode only.
+    # Keep that default, but honor an explicit with_camera:=true in teleport mode too.
     with_camera_for_mode = PythonExpression([
-        "'true' if '", LaunchConfiguration('uav_mode'), "' == 'physics' else 'false'"
+        "'true' if (",
+        "'", LaunchConfiguration('with_camera'), "'.lower() in ('1','true','yes','on')",
+        " or ",
+        "'", LaunchConfiguration('uav_mode'), "' == 'physics'",
+        ") else 'false'"
+    ])
+    model_static_for_mode = PythonExpression([
+        "'true' if '", LaunchConfiguration('uav_mode'), "' == 'teleport' else 'false'"
     ])
 
     generate_sdf_exe = os.path.join(
@@ -75,6 +91,7 @@ def generate_launch_description():
                     " -p name:=", LaunchConfiguration('name'),
                     " -p robot:=True",
                     " -p with_camera:=", with_camera_for_mode,
+                    " -p model_static:=", model_static_for_mode,
                     " -p camera_name:=", LaunchConfiguration('camera_name')
                 ]),
                 '-x', LaunchConfiguration('x'),
@@ -87,7 +104,20 @@ def generate_launch_description():
             ]
         )
 
-    
+    camera_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            ['/', LaunchConfiguration('name'), '/', LaunchConfiguration('camera_name'),
+             '/image_raw@sensor_msgs/msg/Image@ignition.msgs.Image'],
+            ['/', LaunchConfiguration('name'), '/', LaunchConfiguration('camera_name'),
+             '/camera_info@sensor_msgs/msg/CameraInfo@ignition.msgs.CameraInfo'],
+        ],
+        output='screen',
+        condition=IfCondition(PythonExpression([
+            "'", LaunchConfiguration('bridge_camera'), "'.lower() in ('1','true','yes','on')"
+        ])),
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument('x', default_value="0.0"),
@@ -100,9 +130,11 @@ def generate_launch_description():
         type_arg,
         uav_mode_arg,
         with_camera_arg,
+        bridge_camera_arg,
         camera_name_arg,
         model_arg,
         world_arg,        
         name_arg,
-        spawn_node
+        spawn_node,
+        camera_bridge
     ])

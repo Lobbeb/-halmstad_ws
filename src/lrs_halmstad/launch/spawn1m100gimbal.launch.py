@@ -17,36 +17,9 @@ def get_m100_with_gimbal(name, z, world):
         launch_arguments={"name": name,
                           "type": "m100",
                           "with_camera": "true",
-                          "world": world,
-                          "z": f'{z}'
-                          }.items(),
-    )
-    return res;
-
-def get_m100(name, z, world):
-    res = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('lrs_halmstad'),
-                'spawn_robot.launch.py')),
-        launch_arguments={"name": name,
-                          "type": "m100",
-                          "world": world,
-                          "z": f'{z}'
-                          }.items(),
-    )
-    return res;
-
-def get_gimbal(name, z, world):
-    res = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                get_package_share_directory('lrs_halmstad'),
-                'spawn_gimbal.launch.py')),
-        launch_arguments={"name": name,
-                          "type": "m100",
-                          "world": world,
+                          "bridge_camera": "true",
                           "camera_name": "camera0",
+                          "world": world,
                           "z": f'{z}'
                           }.items(),
     )
@@ -64,9 +37,7 @@ def generate_launch_description():
     name = LaunchConfiguration('name')
     world = LaunchConfiguration('world')
     
-    dji0 = get_m100(name, 9.0, world)
-
-    gimb0 = get_gimbal(name, 9.0, world)
+    dji0 = get_m100_with_gimbal(name, 9.0, world)
 
     bridge = Node(
         package='ros_gz_bridge',
@@ -82,6 +53,5 @@ def generate_launch_description():
         name_arg,
         world_arg,
         bridge,
-        dji0,
-        gimb0
+        dji0
     ])
