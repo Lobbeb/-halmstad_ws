@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from rclpy.time import Time
 
 import numpy as np
@@ -96,15 +98,21 @@ class LeaderEstimator(Node):
         self.declare_parameter("out_topic", "/coord/leader_estimate")
         self.declare_parameter("status_topic", "/coord/leader_estimate_status")
         self.declare_parameter("publish_status", True)
+        self.declare_parameter("debug_image_topic", "/coord/leader_debug_image")
+        self.declare_parameter("publish_debug_image", True)
+        self.declare_parameter("fault_status_topic", "/coord/leader_estimate_fault")
+        self.declare_parameter("publish_fault_status", True)
 
         self.declare_parameter("est_hz", 5.0, dyn_num)
         self.declare_parameter("image_timeout_s", 1.0)
         self.declare_parameter("uav_pose_timeout_s", 1.0)
 
         # YOLO and detection config
-        self.declare_parameter("yolo_weights", "")
+        self.declare_parameter("yolo_weights", "~/halmstad_ws/models/yolo26n.torchscript")
+        self.declare_parameter("yolo_backend", "ultralytics")  # auto|ultralytics|yolov5
+        self.declare_parameter("yolov5_repo_path", "")
         self.declare_parameter("device", "cpu")
-        self.declare_parameter("conf_threshold", 0.25, dyn_num)
+        self.declare_parameter("conf_threshold", 0.05, dyn_num)
         self.declare_parameter("iou_threshold", 0.45, dyn_num)
         self.declare_parameter("imgsz", 640)
         self.declare_parameter("target_class_id", -1)
@@ -131,7 +139,7 @@ class LeaderEstimator(Node):
         self.declare_parameter("latency_comp_max_s", 0.25, dyn_num)
 
         # Range and geometry
-        self.declare_parameter("constant_range_m", 8.0, dyn_num)
+        self.declare_parameter("constant_range_m", 5.0, dyn_num)
         self.declare_parameter("range_mode", "auto")  # auto|depth|ground|const
         self.declare_parameter("use_depth_range", True)
         self.declare_parameter("depth_scale", 0.001, dyn_num)  # for 16UC1 mm -> m
@@ -141,7 +149,7 @@ class LeaderEstimator(Node):
         self.declare_parameter("ground_min_range_m", 2.0, dyn_num)
         self.declare_parameter("ground_max_range_m", 50.0, dyn_num)
         self.declare_parameter("cam_yaw_offset_deg", 0.0, dyn_num)
-        self.declare_parameter("cam_pitch_offset_deg", -90.0, dyn_num)
+        self.declare_parameter("cam_pitch_offset_deg", +60.0, dyn_num)
         self.declare_parameter("cam_roll_offset_deg", 0.0, dyn_num)
         self.declare_parameter("cam_x_offset_m", 0.0, dyn_num)
         self.declare_parameter("cam_y_offset_m", 0.0, dyn_num)
@@ -163,12 +171,18 @@ class LeaderEstimator(Node):
         self.out_topic = str(self.get_parameter("out_topic").value)
         self.status_topic = str(self.get_parameter("status_topic").value)
         self.publish_status = bool(self.get_parameter("publish_status").value)
+        self.debug_image_topic = str(self.get_parameter("debug_image_topic").value)
+        self.publish_debug_image = bool(self.get_parameter("publish_debug_image").value)
+        self.fault_status_topic = str(self.get_parameter("fault_status_topic").value)
+        self.publish_fault_status = bool(self.get_parameter("publish_fault_status").value)
 
         self.est_hz = float(self.get_parameter("est_hz").value)
         self.image_timeout_s = float(self.get_parameter("image_timeout_s").value)
         self.uav_pose_timeout_s = float(self.get_parameter("uav_pose_timeout_s").value)
 
         self.yolo_weights = str(self.get_parameter("yolo_weights").value)
+        self.yolo_backend = str(self.get_parameter("yolo_backend").value).strip().lower()
+        self.yolov5_repo_path = str(self.get_parameter("yolov5_repo_path").value).strip()
         self.device = str(self.get_parameter("device").value)
         self.conf_threshold = float(self.get_parameter("conf_threshold").value)
         self.iou_threshold = float(self.get_parameter("iou_threshold").value)
@@ -221,6 +235,8 @@ class LeaderEstimator(Node):
 
         if self.est_hz <= 0.0:
             raise ValueError("est_hz must be > 0")
+        if self.yolo_backend not in ("auto", "ultralytics", "yolov5"):
+            raise ValueError("yolo_backend must be one of: auto, ultralytics, yolov5")
         if self.constant_range_m <= 0.0:
             raise ValueError("constant_range_m must be > 0")
         if not (0.0 <= self.smooth_alpha <= 1.0):
@@ -294,6 +310,9 @@ class LeaderEstimator(Node):
         self.last_range_used_m: float = -1.0
         self.last_bearing_used_deg: float = 0.0
         self.last_reject_reason: str = "none"
+        self.last_fault_state: str = "none"
+        self.last_fault_reason: str = "none"
+        self.last_fault_stamp: Optional[Time] = None
         self.good_det_streak = 0
         self.bad_det_streak = 0
         self.track_latched = False
@@ -311,6 +330,7 @@ class LeaderEstimator(Node):
         self.yolo_model = None
         self.yolo_ready = False
         self.yolo_error: Optional[str] = None
+        self.yolo_backend_active = "none"
         self._init_yolo()
 
         # I/O
@@ -324,6 +344,18 @@ class LeaderEstimator(Node):
         self.pub = self.create_publisher(PoseStamped, self.out_topic, 10)
         self.status_pub = self.create_publisher(String, self.status_topic, 10)
         self.events_pub = self.create_publisher(String, self.event_topic, 10)
+        self.debug_image_pub = self.create_publisher(Image, self.debug_image_topic, 2) if self.publish_debug_image else None
+        fault_qos = QoSProfile(
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.fault_status_pub = (
+            self.create_publisher(String, self.fault_status_topic, fault_qos)
+            if self.publish_fault_status
+            else None
+        )
 
         self.timer = self.create_timer(1.0 / self.est_hz, self.on_tick)
         self.status_timer = self.create_timer(1.0, self.on_status_tick)
@@ -332,6 +364,10 @@ class LeaderEstimator(Node):
         self.get_logger().info(f"[leader_estimator] Using camera_info_topic={self.camera_info_topic}")
         self.get_logger().info(f"[leader_estimator] Using depth_topic={self.depth_topic or '<disabled>'}")
         self.get_logger().info(f"[leader_estimator] Using uav_pose_topic={self.uav_pose_topic}")
+        if self.publish_debug_image:
+            self.get_logger().info(f"[leader_estimator] Using debug_image_topic={self.debug_image_topic}")
+        if self.publish_fault_status:
+            self.get_logger().info(f"[leader_estimator] Using fault_status_topic={self.fault_status_topic}")
         self.get_logger().info("[leader_estimator] Subscribed ok")
 
         self.get_logger().info(
@@ -339,19 +375,80 @@ class LeaderEstimator(Node):
             f"image={self.camera_topic}, camera_info={self.camera_info_topic}, depth={self.depth_topic or 'disabled'}, "
             f"uav_pose={self.uav_pose_topic}, out={self.out_topic}, est_hz={self.est_hz}Hz, "
             f"range=constant({self.constant_range_m:.2f}m){'+depth' if self.use_depth_range and self.depth_topic else ''}, "
-            f"yolo_weights={self.yolo_weights or '<auto/none>'}, device={self.device}, "
+            f"yolo_weights={self.yolo_weights or '<auto/none>'}, yolo_backend={self.yolo_backend_active}, device={self.device}, "
             f"smooth_alpha={self.smooth_alpha}, max_hold_frames={self.max_hold_frames}, max_hold_s={self.max_hold_s}, "
             f"xy_smooth_alpha={self.xy_smooth_alpha}, range_mode={self.range_mode}, "
             f"cam_pitch_deg={math.degrees(self.cam_pitch_offset_rad):.1f}, cam_yaw_deg={math.degrees(self.cam_yaw_offset_rad):.1f}, "
             f"tracker={self.tracker_enable} a={self.tracker_alpha} b={self.tracker_beta}, "
             f"debounce(ok={self.ok_debounce_frames},bad={self.bad_debounce_frames})"
         )
+        self.publish_fault_status_msg(self._fault_line("none", "none", self.get_clock().now()))
         self.emit_event("ESTIMATOR_NODE_START")
 
-    def _init_yolo(self) -> None:
+    def _init_yolo_ultralytics(self) -> bool:
         if YOLO is None:
             self.yolo_error = "ultralytics_not_installed"
-            return
+            return False
+        try:
+            self.yolo_model = YOLO(self.yolo_weights)
+            self.yolo_ready = True
+            self.yolo_backend_active = "ultralytics"
+            self.get_logger().info(f"[leader_estimator] YOLO loaded (ultralytics): {self.yolo_weights}")
+            return True
+        except Exception as e:
+            self.yolo_error = f"yolo_load_failed_ultralytics:{e}"
+            self.get_logger().warn(
+                f"[leader_estimator] Failed to load weights with ultralytics '{self.yolo_weights}': {e}"
+            )
+            return False
+
+    def _init_yolo_yolov5(self) -> bool:
+        if not self.yolov5_repo_path:
+            self.yolo_error = "yolov5_repo_path_not_set"
+            self.get_logger().warn(
+                "[leader_estimator] yolo_backend=yolov5 but 'yolov5_repo_path' is empty "
+                "(set it to a local yolov5 checkout containing models/ and utils/)."
+            )
+            return False
+        repo = os.path.expanduser(self.yolov5_repo_path)
+        if not os.path.isdir(repo):
+            self.yolo_error = f"yolov5_repo_not_found:{repo}"
+            self.get_logger().warn(f"[leader_estimator] YOLOv5 repo path not found: {repo}")
+            return False
+        if not os.path.isfile(os.path.join(repo, "hubconf.py")):
+            self.yolo_error = f"invalid_yolov5_repo:{repo}"
+            self.get_logger().warn(f"[leader_estimator] YOLOv5 repo path missing hubconf.py: {repo}")
+            return False
+        try:
+            import torch  # type: ignore
+        except Exception as e:
+            self.yolo_error = f"torch_not_installed:{e}"
+            self.get_logger().warn(f"[leader_estimator] PyTorch is required for YOLOv5 backend: {e}")
+            return False
+
+        # Make legacy modules importable during checkpoint deserialization.
+        if repo not in sys.path:
+            sys.path.insert(0, repo)
+        try:
+            model = torch.hub.load(repo, "custom", path=self.yolo_weights, source="local")
+            try:
+                model.to(self.device)
+            except Exception:
+                # Some hub wrappers may not support .to() on all backends; inference will still try.
+                pass
+            self.yolo_model = model
+            self.yolo_ready = True
+            self.yolo_backend_active = "yolov5"
+            self.get_logger().info(f"[leader_estimator] YOLO loaded (yolov5 hub local): {self.yolo_weights}")
+            return True
+        except Exception as e:
+            self.yolo_error = f"yolo_load_failed_yolov5:{e}"
+            self.get_logger().warn(
+                f"[leader_estimator] Failed to load weights with local YOLOv5 backend '{self.yolo_weights}': {e}"
+            )
+            return False
+
+    def _init_yolo(self) -> None:
         if not self.yolo_weights:
             self.yolo_error = "yolo_weights_not_set"
             return
@@ -359,13 +456,21 @@ class LeaderEstimator(Node):
             self.yolo_error = f"file_not_found:{self.yolo_weights}"
             self.get_logger().warn(f"[leader_estimator] YOLO weights file not found: {self.yolo_weights}")
             return
-        try:
-            self.yolo_model = YOLO(self.yolo_weights)
-            self.yolo_ready = True
-            self.get_logger().info(f"[leader_estimator] YOLO loaded: {self.yolo_weights}")
-        except Exception as e:
-            self.yolo_error = f"yolo_load_failed:{e}"
-            self.get_logger().warn(f"[leader_estimator] Failed to load YOLO weights '{self.yolo_weights}': {e}")
+
+        backend = self.yolo_backend
+        if backend == "ultralytics":
+            self._init_yolo_ultralytics()
+            return
+        if backend == "yolov5":
+            self._init_yolo_yolov5()
+            return
+
+        # auto: prefer ultralytics first; if it fails and a local yolov5 repo path is provided,
+        # fall back to YOLOv5 native loader for legacy checkpoints.
+        if self._init_yolo_ultralytics():
+            return
+        if self.yolov5_repo_path:
+            self._init_yolo_yolov5()
 
     def emit_event(self, s: str) -> None:
         if not self.publish_events:
@@ -380,6 +485,34 @@ class LeaderEstimator(Node):
         msg = String()
         msg.data = s
         self.status_pub.publish(msg)
+
+    def publish_fault_status_msg(self, s: str) -> None:
+        if not self.publish_fault_status or self.fault_status_pub is None:
+            return
+        msg = String()
+        msg.data = s
+        self.fault_status_pub.publish(msg)
+
+    def _fault_age_ms(self, now: Time) -> float:
+        if self.last_fault_stamp is None:
+            return -1.0
+        return max(0.0, (now - self.last_fault_stamp).nanoseconds * 1e-6)
+
+    def _fault_line(self, state: str, reason: str, now: Time) -> str:
+        yolo_state = "enabled" if self.yolo_ready else "disabled"
+        yolo_reason = self.yolo_error if self.yolo_error is not None else "ok"
+        return (
+            f"state={state} reason={reason} fault_age_ms={self._fault_age_ms(now):.1f} "
+            f"yolo={yolo_state} yolo_reason={yolo_reason} "
+            f"conf={self.last_det_conf:.3f} latency_ms={self.last_latency_ms:.1f} "
+            f"reject_reason={self.last_reject_reason}"
+        )
+
+    def _record_fault(self, state: str, reason: str, now: Time) -> None:
+        self.last_fault_state = str(state).strip() or "unknown"
+        self.last_fault_reason = str(reason).strip() or "none"
+        self.last_fault_stamp = now
+        self.publish_fault_status_msg(self._fault_line(self.last_fault_state, self.last_fault_reason, now))
 
     def on_image(self, msg: Image) -> None:
         self.last_image_msg = msg
@@ -499,9 +632,99 @@ class LeaderEstimator(Node):
             return None
         return None
 
-    def _pick_detection(self, img_bgr: np.ndarray) -> Optional[Detection2D]:
-        if not self.yolo_ready or self.yolo_model is None:
+    def _bgr_to_image_msg(self, img_bgr: np.ndarray) -> Optional[Image]:
+        try:
+            if img_bgr.ndim != 3 or img_bgr.shape[2] != 3:
+                return None
+            h, w = img_bgr.shape[:2]
+            msg = Image()
+            if self.last_image_msg is not None:
+                msg.header.stamp = self.last_image_msg.header.stamp
+                msg.header.frame_id = self.last_image_msg.header.frame_id
+            else:
+                msg.header.stamp = self.get_clock().now().to_msg()
+                msg.header.frame_id = ""
+            msg.height = int(h)
+            msg.width = int(w)
+            msg.encoding = "bgr8"
+            msg.is_bigendian = 0
+            msg.step = int(w * 3)
+            msg.data = np.ascontiguousarray(img_bgr).tobytes()
+            return msg
+        except Exception:
             return None
+
+    def _debug_color(self, state: str) -> Tuple[int, int, int]:
+        if state == "OK":
+            return (0, 220, 0)
+        if "REJECT" in state:
+            return (0, 0, 255)
+        if state in ("NO_DET", "YOLO_DISABLED", "STALE", "DECODE_FAIL"):
+            return (0, 165, 255)
+        return (255, 200, 0)
+
+    def _publish_debug_image(self, img_bgr: np.ndarray, state: str, det: Optional[Detection2D] = None) -> None:
+        if not self.publish_debug_image or self.debug_image_pub is None:
+            return
+        try:
+            out = img_bgr.copy()
+            if cv2 is not None:
+                color = self._debug_color(state)
+                h, w = out.shape[:2]
+                if det is not None:
+                    x1, y1, x2, y2 = det.bbox
+                    p1 = (int(round(x1)), int(round(y1)))
+                    p2 = (int(round(x2)), int(round(y2)))
+                    cv2.rectangle(out, p1, p2, color, 2)
+                    cv2.circle(out, (int(round(det.u)), int(round(det.v))), 3, color, -1)
+                    cls_txt = det.cls_name if det.cls_name else (str(det.cls_id) if det.cls_id is not None else "na")
+                    label = f"{cls_txt} {det.conf:.2f}"
+                    cv2.putText(out, label, (p1[0], max(16, p1[1] - 6)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+
+                lines = [
+                    f"{state} yolo={'on' if self.yolo_ready else 'off'} conf={self.last_det_conf:.2f} lat={self.last_latency_ms:.1f}ms",
+                    f"range={self.last_range_used_m:.2f}m src={self.last_range_source} bearing={self.last_bearing_used_deg:.1f}deg",
+                    f"reject={self.last_reject_reason}",
+                ]
+                y = 20
+                for line in lines:
+                    cv2.putText(out, line, (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 20, 20), 3, cv2.LINE_AA)
+                    cv2.putText(out, line, (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                    y += 18
+
+                # Crosshair
+                cv2.line(out, (w // 2 - 8, h // 2), (w // 2 + 8, h // 2), (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.line(out, (w // 2, h // 2 - 8), (w // 2, h // 2 + 8), (255, 255, 255), 1, cv2.LINE_AA)
+
+            msg = self._bgr_to_image_msg(out)
+            if msg is not None:
+                self.debug_image_pub.publish(msg)
+        except Exception as e:
+            self.get_logger().warn(f"[leader_estimator] Failed debug image publish: {e}")
+
+    def _score_candidate(self, cand: Detection2D) -> float:
+        score = cand.conf
+        if self.last_det_center is not None:
+            du = cand.u - self.last_det_center[0]
+            dv = cand.v - self.last_det_center[1]
+            dpx = math.hypot(du, dv)
+            if self.bbox_continuity_max_px > 0.0 and dpx > self.bbox_continuity_max_px:
+                score -= 1.0
+            if self.bbox_continuity_weight > 0.0:
+                score -= self.bbox_continuity_weight * (dpx / max(1.0, self.bbox_continuity_max_px))
+            if self.last_det_cls_id is not None and cand.cls_id == self.last_det_cls_id:
+                score += self.bbox_continuity_class_bonus
+        return score
+
+    def _candidate_ok(self, cls_id: Optional[int], cls_name: str) -> bool:
+        if self.target_class_id >= 0 and cls_id != self.target_class_id:
+            return False
+        if self.target_class_name and cls_name.lower() != self.target_class_name.lower():
+            return False
+        return True
+
+    def _pick_detection_ultralytics(self, img_bgr: np.ndarray) -> Optional[Detection2D]:
         try:
             results = self.yolo_model.predict(
                 source=img_bgr,
@@ -512,8 +735,8 @@ class LeaderEstimator(Node):
                 device=self.device,
             )
         except Exception as e:
-            self.yolo_error = f"infer_failed:{e}"
-            self.get_logger().warn(f"[leader_estimator] YOLO inference failed: {e}")
+            self.yolo_error = f"infer_failed_ultralytics:{e}"
+            self.get_logger().warn(f"[leader_estimator] YOLO inference failed (ultralytics): {e}")
             return None
         if not results:
             return None
@@ -522,8 +745,8 @@ class LeaderEstimator(Node):
         boxes = getattr(result, "boxes", None)
         if boxes is None or len(boxes) == 0:
             return None
-
         names = getattr(result, "names", {}) or {}
+
         best: Optional[Detection2D] = None
         best_score = -1e9
         for b in boxes:
@@ -535,31 +758,85 @@ class LeaderEstimator(Node):
                 cls_name = str(names.get(cls_id, "")) if cls_id is not None else ""
             except Exception:
                 continue
-
-            if self.target_class_id >= 0 and cls_id != self.target_class_id:
+            if not self._candidate_ok(cls_id, cls_name):
                 continue
-            if self.target_class_name and cls_name.lower() != self.target_class_name.lower():
-                continue
-
-            u = 0.5 * (x1 + x2)
-            v = 0.5 * (y1 + y2)
-            cand = Detection2D(u=u, v=v, conf=conf, bbox=(x1, y1, x2, y2), cls_id=cls_id, cls_name=cls_name)
-            score = cand.conf
-            if self.last_det_center is not None:
-                du = cand.u - self.last_det_center[0]
-                dv = cand.v - self.last_det_center[1]
-                dpx = math.hypot(du, dv)
-                if self.bbox_continuity_max_px > 0.0 and dpx > self.bbox_continuity_max_px:
-                    score -= 1.0
-                if self.bbox_continuity_weight > 0.0:
-                    score -= self.bbox_continuity_weight * (dpx / max(1.0, self.bbox_continuity_max_px))
-                if self.last_det_cls_id is not None and cand.cls_id == self.last_det_cls_id:
-                    score += self.bbox_continuity_class_bonus
+            cand = Detection2D(
+                u=0.5 * (x1 + x2),
+                v=0.5 * (y1 + y2),
+                conf=conf,
+                bbox=(x1, y1, x2, y2),
+                cls_id=cls_id,
+                cls_name=cls_name,
+            )
+            score = self._score_candidate(cand)
             if best is None or score > best_score:
                 best = cand
                 best_score = score
-
         return best
+
+    def _pick_detection_yolov5(self, img_bgr: np.ndarray) -> Optional[Detection2D]:
+        try:
+            # YOLOv5 hub model supports these attributes and call signature.
+            if hasattr(self.yolo_model, "conf"):
+                self.yolo_model.conf = self.conf_threshold
+            if hasattr(self.yolo_model, "iou"):
+                self.yolo_model.iou = self.iou_threshold
+            results = self.yolo_model(img_bgr, size=self.imgsz)
+        except Exception as e:
+            self.yolo_error = f"infer_failed_yolov5:{e}"
+            self.get_logger().warn(f"[leader_estimator] YOLO inference failed (yolov5): {e}")
+            return None
+
+        preds = getattr(results, "xyxy", None)
+        if preds is None or len(preds) == 0:
+            return None
+        pred0 = preds[0]
+        try:
+            arr = pred0.detach().cpu().numpy() if hasattr(pred0, "detach") else pred0
+        except Exception:
+            try:
+                arr = pred0.cpu().numpy()
+            except Exception:
+                return None
+        if arr is None or len(arr) == 0:
+            return None
+
+        names = getattr(results, "names", None)
+        if names is None:
+            names = getattr(self.yolo_model, "names", {}) or {}
+
+        best: Optional[Detection2D] = None
+        best_score = -1e9
+        for row in arr:
+            try:
+                x1, y1, x2, y2 = [float(v) for v in row[:4]]
+                conf = float(row[4]) if len(row) > 4 else 0.0
+                cls_id = int(row[5]) if len(row) > 5 else None
+                cls_name = str(names.get(cls_id, "")) if cls_id is not None and hasattr(names, "get") else ""
+            except Exception:
+                continue
+            if not self._candidate_ok(cls_id, cls_name):
+                continue
+            cand = Detection2D(
+                u=0.5 * (x1 + x2),
+                v=0.5 * (y1 + y2),
+                conf=conf,
+                bbox=(x1, y1, x2, y2),
+                cls_id=cls_id,
+                cls_name=cls_name,
+            )
+            score = self._score_candidate(cand)
+            if best is None or score > best_score:
+                best = cand
+                best_score = score
+        return best
+
+    def _pick_detection(self, img_bgr: np.ndarray) -> Optional[Detection2D]:
+        if not self.yolo_ready or self.yolo_model is None:
+            return None
+        if self.yolo_backend_active == "yolov5":
+            return self._pick_detection_yolov5(img_bgr)
+        return self._pick_detection_ultralytics(img_bgr)
 
     def _estimate_quality_scale(self, conf: float, latency_ms: float) -> float:
         conf_floor = max(1e-3, min(0.95, self.conf_threshold))
@@ -783,7 +1060,7 @@ class LeaderEstimator(Node):
         self.prev_estimate_stamp = now
         self.prev_heading_yaw = est_pose.yaw
 
-    def _status_line(self, state: str, now: Time, extra: str = "") -> str:
+    def _status_line(self, state: str, now: Time, state_reason: str = "", extra: str = "") -> str:
         image_age_s = float("inf")
         image_age_ms = float("inf")
         pose_age = float("inf")
@@ -795,6 +1072,7 @@ class LeaderEstimator(Node):
         yolo_state = "enabled" if self.yolo_ready else "disabled"
         yolo_reason = self.yolo_error if self.yolo_error is not None else "ok"
         suffix = f" {extra}" if extra else ""
+        state_reason = state_reason.strip() if state_reason else "none"
         img_wall_age_ms = -1.0
         if self.last_image_recv_walltime is not None:
             img_wall_age_ms = (time.monotonic() - self.last_image_recv_walltime) * 1000.0
@@ -802,6 +1080,8 @@ class LeaderEstimator(Node):
             f"state={state} last_img_age_ms={image_age_ms if math.isfinite(image_age_ms) else 'inf'} "
             f"last_img_recv_wall_age_ms={img_wall_age_ms:.1f} "
             f"yolo={yolo_state} yolo_reason={yolo_reason} device={self.device} "
+            f"state_reason={state_reason} last_fault_state={self.last_fault_state} "
+            f"last_fault_reason={self.last_fault_reason} last_fault_age_ms={self._fault_age_ms(now):.1f} "
             f"conf={self.last_det_conf:.3f} latency_ms={self.last_latency_ms:.1f} "
             f"range_src={self.last_range_source} range_mode={self.range_mode} range_m={self.last_range_used_m:.2f} "
             f"bearing_deg={self.last_bearing_used_deg:.1f} reject_reason={self.last_reject_reason} "
@@ -881,11 +1161,13 @@ class LeaderEstimator(Node):
                 reasons.append("image_stale")
             if not pose_ok:
                 reasons.append("uav_pose_stale")
+            reason_str = ",".join(reasons) if reasons else "unknown"
             state = "STALE"
             self.last_det_conf = -1.0
             self.last_latency_ms = -1.0
             self.last_range_source = "none"
-            self.publish_status_msg(self._status_line(state, now, extra=f"reason={','.join(reasons)}"))
+            self._record_fault(state, reason_str, now)
+            self.publish_status_msg(self._status_line(state, now, state_reason=reason_str, extra=f"reason={reason_str}"))
             if self.last_status != state:
                 self.emit_event("ESTIMATE_STALE")
                 self.last_status = state
@@ -900,7 +1182,9 @@ class LeaderEstimator(Node):
             self.last_latency_ms = -1.0
             self.last_range_source = "none"
             state = "DECODE_FAIL"
-            self.publish_status_msg(self._status_line(state, now))
+            self._record_fault(state, "image_decode", now)
+            self._publish_debug_image(img_bgr=np.zeros((max(1, int(self.last_image_msg.height)), max(1, int(self.last_image_msg.width)), 3), dtype=np.uint8), state=state)
+            self.publish_status_msg(self._status_line(state, now, state_reason="image_decode"))
             if self.last_status != state:
                 self.emit_event("ESTIMATE_STALE")
                 self.last_status = state
@@ -914,7 +1198,9 @@ class LeaderEstimator(Node):
                 self.track_latched = False
             if self.yolo_ready and self._publish_held_estimate(now):
                 state = "HOLD" if self.bad_det_streak >= self.bad_debounce_frames else "DEBOUNCE_HOLD"
-                self.publish_status_msg(self._status_line(state, now))
+                self._record_fault(state, "no_detection", now)
+                self._publish_debug_image(img_bgr, state)
+                self.publish_status_msg(self._status_line(state, now, state_reason="no_detection"))
                 if self.last_status != state:
                     self.emit_event("ESTIMATE_OK")
                     self.last_status = state
@@ -923,7 +1209,10 @@ class LeaderEstimator(Node):
             self.last_latency_ms = -1.0
             self.last_range_source = "none"
             state = "NO_DET" if self.yolo_ready else "YOLO_DISABLED"
-            self.publish_status_msg(self._status_line(state, now))
+            state_reason = "no_detection" if self.yolo_ready else (self.yolo_error if self.yolo_error is not None else "yolo_disabled")
+            self._record_fault(state, state_reason, now)
+            self._publish_debug_image(img_bgr, state)
+            self.publish_status_msg(self._status_line(state, now, state_reason=state_reason))
             if self.last_status != state:
                 self.emit_event("ESTIMATE_STALE")
                 self.last_status = state
@@ -940,7 +1229,9 @@ class LeaderEstimator(Node):
             self.last_reject_reason = reject_reason
             if self._publish_held_estimate(now):
                 state = "REJECT_HOLD" if self.bad_det_streak >= self.bad_debounce_frames else "REJECT_DEBOUNCE_HOLD"
-                self.publish_status_msg(self._status_line(state, now))
+                self._record_fault(state, reject_reason, now)
+                self._publish_debug_image(img_bgr, state, det)
+                self.publish_status_msg(self._status_line(state, now, state_reason=reject_reason))
                 if self.last_status != state:
                     self.emit_event("ESTIMATE_OK")
                     self.last_status = state
@@ -949,7 +1240,9 @@ class LeaderEstimator(Node):
             self.last_latency_ms = -1.0
             self.last_range_source = "reject"
             state = "REJECT"
-            self.publish_status_msg(self._status_line(state, now))
+            self._record_fault(state, reject_reason, now)
+            self._publish_debug_image(img_bgr, state, det)
+            self.publish_status_msg(self._status_line(state, now, state_reason=reject_reason))
             if self.last_status != state:
                 self.emit_event("ESTIMATE_STALE")
                 self.last_status = state
@@ -976,6 +1269,7 @@ class LeaderEstimator(Node):
             self.last_good_estimate_stamp = now
             self.hold_frames_left = self.max_hold_frames
             state = "REACQUIRE"
+            self._publish_debug_image(img_bgr, state, det)
             if self._publish_held_estimate(now):
                 self.publish_status_msg(self._status_line(state, now))
             else:
@@ -995,6 +1289,7 @@ class LeaderEstimator(Node):
 
         state = "OK"
         cls_txt = det.cls_name if det.cls_name else (str(det.cls_id) if det.cls_id is not None else "na")
+        self._publish_debug_image(img_bgr, state, det)
         self.publish_status_msg(self._status_line(state, now, extra=f"class={cls_txt}"))
         if self.last_status != state:
             self.emit_event("ESTIMATE_OK")

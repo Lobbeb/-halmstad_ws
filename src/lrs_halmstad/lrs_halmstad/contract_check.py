@@ -8,6 +8,8 @@ import rclpy
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 
+from lrs_halmstad.world_names import gazebo_world_name
+
 
 REQUIRED_SERVICES = [
     "/world/{world}/set_pose",
@@ -74,7 +76,7 @@ class ContractChecker(Node):
         if event_topic != "/coord/events":
             required_topics.append("/coord/events")
 
-        required_services = [s.format(world=world) for s in REQUIRED_SERVICES]
+        required_services = [s.format(world=gazebo_world_name(world)) for s in REQUIRED_SERVICES]
 
         if require_flow and flow_topics:
             self._setup_flow_subscriptions(flow_topics)

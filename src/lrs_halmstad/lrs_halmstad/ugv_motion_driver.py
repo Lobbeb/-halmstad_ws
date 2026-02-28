@@ -8,6 +8,8 @@ import rclpy
 from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import LaserScan
 
 
 class UgvMotionDriver(Node):
@@ -32,6 +34,17 @@ class UgvMotionDriver(Node):
         self.declare_parameter("variation_amplitude", 0.20)
         self.declare_parameter("pause_every_n", 0)
         self.declare_parameter("pause_time_s", 0.0)
+        self.declare_parameter("obstacle_avoid_enable", False)
+        self.declare_parameter("scan_topic", "/a201_0000/sensors/lidar3d_0/scan")
+        self.declare_parameter("scan_timeout_s", 0.75)
+        self.declare_parameter("stop_on_scan_timeout", False)
+        self.declare_parameter("front_sector_deg", 70.0)
+        self.declare_parameter("side_sector_min_deg", 20.0)
+        self.declare_parameter("side_sector_max_deg", 100.0)
+        self.declare_parameter("stop_distance_m", 1.25)
+        self.declare_parameter("clear_distance_m", 1.80)
+        self.declare_parameter("avoid_turn_speed", 0.80)
+        self.declare_parameter("min_valid_scan_points", 3)
 
         # Lightweight readiness gate to avoid sending motion commands before the
         # UGV controller subscriber is ready/active. This is especially useful
@@ -62,6 +75,20 @@ class UgvMotionDriver(Node):
         self.variation_amplitude = float(self.get_parameter("variation_amplitude").value)
         self.pause_every_n = max(0, int(self.get_parameter("pause_every_n").value))
         self.pause_time_s = max(0.0, float(self.get_parameter("pause_time_s").value))
+        self.obstacle_avoid_enable = bool(self.get_parameter("obstacle_avoid_enable").value)
+        self.scan_topic = str(self.get_parameter("scan_topic").value)
+        self.scan_timeout_s = max(0.0, float(self.get_parameter("scan_timeout_s").value))
+        self.stop_on_scan_timeout = bool(self.get_parameter("stop_on_scan_timeout").value)
+        self.front_sector_deg = max(1.0, float(self.get_parameter("front_sector_deg").value))
+        self.side_sector_min_deg = max(0.0, float(self.get_parameter("side_sector_min_deg").value))
+        self.side_sector_max_deg = max(
+            self.side_sector_min_deg,
+            float(self.get_parameter("side_sector_max_deg").value),
+        )
+        self.stop_distance_m = max(0.05, float(self.get_parameter("stop_distance_m").value))
+        self.clear_distance_m = max(self.stop_distance_m, float(self.get_parameter("clear_distance_m").value))
+        self.avoid_turn_speed = abs(float(self.get_parameter("avoid_turn_speed").value))
+        self.min_valid_scan_points = max(1, int(self.get_parameter("min_valid_scan_points").value))
 
         self.ready_check_enable = bool(self.get_parameter("ready_check_enable").value)
         self.ready_require_cmd_subscriber = bool(self.get_parameter("ready_require_cmd_subscriber").value)
@@ -72,14 +99,29 @@ class UgvMotionDriver(Node):
         self.ready_settle_s = max(0.0, float(self.get_parameter("ready_settle_s").value))
 
         self.variation_amplitude = max(0.0, min(0.45, self.variation_amplitude))
+        self.front_sector_half_rad = math.radians(0.5 * self.front_sector_deg)
+        self.side_sector_min_rad = math.radians(self.side_sector_min_deg)
+        self.side_sector_max_rad = math.radians(self.side_sector_max_deg)
 
         self._apply_motion_profile()
         self._pub = self.create_publisher(TwistStamped, self.cmd_topic, 10)
         self._ready_odom_seen = False
         self._ready_odom_sub = None
+        self._latest_scan_stamp_s = None
+        self._front_min_range_m = float("inf")
+        self._left_clearance_m = float("inf")
+        self._right_clearance_m = float("inf")
+        self._avoid_active = False
+        self._avoid_turn_sign = 1.0
+        self._last_scan_timeout_log_s = 0.0
         if self.ready_check_enable and self.ready_require_odom_flow and self.ready_odom_topic:
             self._ready_odom_sub = self.create_subscription(
                 Odometry, self.ready_odom_topic, self._on_ready_odom, 10
+            )
+        self._scan_sub = None
+        if self.obstacle_avoid_enable and self.scan_topic:
+            self._scan_sub = self.create_subscription(
+                LaserScan, self.scan_topic, self._on_scan, qos_profile_sensor_data
             )
 
     def _apply_motion_profile(self) -> None:
@@ -130,6 +172,109 @@ class UgvMotionDriver(Node):
 
     def _on_ready_odom(self, _msg: Odometry) -> None:
         self._ready_odom_seen = True
+
+    @staticmethod
+    def _mean(values: List[float]) -> float:
+        if not values:
+            return float("inf")
+        return sum(values) / float(len(values))
+
+    def _on_scan(self, msg: LaserScan) -> None:
+        front_ranges: List[float] = []
+        left_ranges: List[float] = []
+        right_ranges: List[float] = []
+        min_valid_range = max(0.05, float(msg.range_min))
+        max_valid_range = float(msg.range_max) if math.isfinite(msg.range_max) and msg.range_max > 0.0 else float("inf")
+        angle = float(msg.angle_min)
+        increment = float(msg.angle_increment)
+
+        for distance in msg.ranges:
+            rng = float(distance)
+            if not math.isfinite(rng) or rng < min_valid_range or rng > max_valid_range:
+                angle += increment
+                continue
+
+            wrapped_angle = math.atan2(math.sin(angle), math.cos(angle))
+            if abs(wrapped_angle) <= self.front_sector_half_rad:
+                front_ranges.append(rng)
+            if self.side_sector_min_rad <= wrapped_angle <= self.side_sector_max_rad:
+                left_ranges.append(rng)
+            elif -self.side_sector_max_rad <= wrapped_angle <= -self.side_sector_min_rad:
+                right_ranges.append(rng)
+            angle += increment
+
+        self._latest_scan_stamp_s = time.monotonic()
+        self._front_min_range_m = min(front_ranges) if len(front_ranges) >= self.min_valid_scan_points else float("inf")
+        self._left_clearance_m = self._mean(left_ranges)
+        self._right_clearance_m = self._mean(right_ranges)
+
+    def _scan_is_fresh(self) -> bool:
+        if self._latest_scan_stamp_s is None:
+            return False
+        if self.scan_timeout_s <= 0.0:
+            return True
+        return (time.monotonic() - self._latest_scan_stamp_s) <= self.scan_timeout_s
+
+    def _choose_avoid_turn_sign(self) -> float:
+        left = self._left_clearance_m
+        right = self._right_clearance_m
+        if math.isfinite(left) and math.isfinite(right):
+            if left > (right + 0.10):
+                return 1.0
+            if right > (left + 0.10):
+                return -1.0
+        elif math.isfinite(left):
+            return 1.0
+        elif math.isfinite(right):
+            return -1.0
+        return self._avoid_turn_sign
+
+    def _apply_obstacle_avoidance(self, vx: float, wz: float) -> Tuple[float, float]:
+        if not self.obstacle_avoid_enable:
+            return vx, wz
+
+        scan_fresh = self._scan_is_fresh()
+        if not scan_fresh:
+            if self.stop_on_scan_timeout:
+                now_s = time.monotonic()
+                if (now_s - self._last_scan_timeout_log_s) >= 1.0:
+                    self.get_logger().warn(
+                        f"LiDAR scan timeout on {self.scan_topic}; holding UGV motion"
+                    )
+                    self._last_scan_timeout_log_s = now_s
+                self._avoid_active = False
+                return 0.0, 0.0
+            return vx, wz
+
+        front_blocked = self._front_min_range_m <= self.stop_distance_m
+        front_cleared = self._front_min_range_m >= self.clear_distance_m
+        was_active = self._avoid_active
+
+        if front_blocked:
+            self._avoid_active = True
+        elif self._avoid_active and not front_cleared:
+            self._avoid_active = True
+        else:
+            self._avoid_active = False
+
+        if not self._avoid_active:
+            if was_active:
+                self.get_logger().info(
+                    f"Obstacle clear ahead ({self._front_min_range_m:.2f} m); resuming scripted motion"
+                )
+            return vx, wz
+
+        self._avoid_turn_sign = self._choose_avoid_turn_sign()
+        avoid_wz = self._avoid_turn_sign * self.avoid_turn_speed
+        if not was_active:
+            turn_dir = "left" if self._avoid_turn_sign > 0.0 else "right"
+            self.get_logger().warn(
+                "Front obstacle detected at "
+                f"{self._front_min_range_m:.2f} m; turning {turn_dir} "
+                f"(left_clearance={self._left_clearance_m:.2f} m, "
+                f"right_clearance={self._right_clearance_m:.2f} m)"
+            )
+        return 0.0, avoid_wz
 
     def _cmd_has_subscriber(self) -> bool:
         return len(self.get_subscriptions_info_by_topic(self.cmd_topic)) > 0
@@ -207,6 +352,13 @@ class UgvMotionDriver(Node):
             f"v_fwd={self.forward_speed:.3f} t_fwd={self.forward_time_s:.3f} "
             f"v_turn={self.turn_speed:.3f} t_turn={self.turn_time_s:.3f} pub_rate={self.pub_rate_hz:.1f}Hz"
         )
+        if self.obstacle_avoid_enable:
+            self.get_logger().info(
+                "UGV obstacle avoidance enabled: "
+                f"scan_topic={self.scan_topic} stop={self.stop_distance_m:.2f}m "
+                f"clear={self.clear_distance_m:.2f}m sector={self.front_sector_deg:.1f}deg "
+                f"avoid_turn={self.avoid_turn_speed:.2f}rad/s"
+            )
 
         dt = 1.0 / self.pub_rate_hz
 
@@ -220,8 +372,9 @@ class UgvMotionDriver(Node):
         for _name, vx, wz, secs in segments:
             t_end = time.monotonic() + max(0.0, float(secs))
             while time.monotonic() < t_end:
-                self._publish_cmd(vx, wz)
                 rclpy.spin_once(self, timeout_sec=0.0)
+                cmd_vx, cmd_wz = self._apply_obstacle_avoidance(vx, wz)
+                self._publish_cmd(cmd_vx, cmd_wz)
                 time.sleep(dt)
 
         for _ in range(max(3, int(math.ceil(0.3 / dt)))):

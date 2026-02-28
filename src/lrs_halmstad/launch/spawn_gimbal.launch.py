@@ -7,13 +7,23 @@ from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 from launch.substitutions import ThisLaunchFileDir, LaunchConfiguration
 from ament_index_python.packages import get_package_share_directory, get_package_prefix
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_path
 
 #from lrs_util import XacroContents
 import launch_ros
 #import xacro
+
+
+def _gazebo_world_name(world_sub):
+    return PythonExpression([
+        "'office_construction' if '",
+        world_sub,
+        "' == 'construction' else '",
+        world_sub,
+        "'",
+    ])
 
 def generate_launch_description():
     urdf_path = get_package_share_path('lrs_halmstad') / 'urdf'
@@ -45,6 +55,7 @@ def generate_launch_description():
     R = LaunchConfiguration('R')
     P = LaunchConfiguration('P')
     Y = LaunchConfiguration('Y')
+    gz_world = _gazebo_world_name(LaunchConfiguration('world'))
     generate_sdf_exe = os.path.join(
         get_package_prefix('lrs_halmstad'),
         'lib',
@@ -57,7 +68,7 @@ def generate_launch_description():
             executable='create',
             name='spawn_entity',
             arguments=[ 
-                '-world', LaunchConfiguration('world'),               
+                '-world', gz_world,
                 '-name', [LaunchConfiguration('name'), "_", LaunchConfiguration('camera_name')],
                 '-robot_namespace', LaunchConfiguration('name'),
 #                '-topic', ['/', LaunchConfiguration('name'), '/robot_description']

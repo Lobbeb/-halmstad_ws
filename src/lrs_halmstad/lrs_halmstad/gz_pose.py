@@ -11,6 +11,8 @@ from ros_gz_interfaces.srv import SetEntityPose
 from geometry_msgs.msg import Pose, Point, Quaternion
 from std_msgs.msg import Header
 
+from lrs_halmstad.world_names import gazebo_world_name
+
 
 @dataclass
 class PoseRPY:
@@ -47,7 +49,7 @@ class GzSetPoseClient(Node):
     def __init__(self, world: str):
         super().__init__("gz_set_pose_client")
         self._world = world
-        self._srv_name = f"/world/{world}/set_pose"
+        self._srv_name = f"/world/{gazebo_world_name(world)}/set_pose"
         self._client = self.create_client(SetEntityPose, self._srv_name)
 
     @property

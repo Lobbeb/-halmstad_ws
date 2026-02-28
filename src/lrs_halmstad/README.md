@@ -34,11 +34,12 @@ Useful topics:
 ## 3. Monitor camera images
 
 ```bash
-ros2 run  rqt_image_view rqt_image_view dummy
+ros2 run rqt_image_view rqt_image_view
 ```
 
 How to use:
 - Opens `rqt_image_view`
+- Optional: pass a topic directly, for example `ros2 run rqt_image_view rqt_image_view /coord/leader_debug_image`
 - Select an image topic (for example `/dji0/camera0/image_raw`) in the GUI
 
 ## 4. Monitor lidar / robot state in RViz
@@ -81,4 +82,3 @@ Arguments:
 - `pitch`: camera pitch angle (degrees)
 - `yaw`: initial yaw angle (degrees)
 - `name`: UAV name (for example `dji0`, `dji1`, `dji2`)
-

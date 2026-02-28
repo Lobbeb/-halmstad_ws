@@ -15,6 +15,16 @@ from ament_index_python.packages import get_package_share_path
 import launch_ros
 #import xacro
 
+
+def _gazebo_world_name(world_sub):
+    return PythonExpression([
+        "'office_construction' if '",
+        world_sub,
+        "' == 'construction' else '",
+        world_sub,
+        "'",
+    ])
+
 def generate_launch_description():
     urdf_path = get_package_share_path('lrs_halmstad') / 'urdf'
     sdf_path = get_package_share_path('lrs_halmstad') / 'sdf'
@@ -44,7 +54,6 @@ def generate_launch_description():
         default_value="false",
         description='Bridge /<name>/<camera_name> image + camera_info topics to ROS'
     )
-    
     camera_name_arg = DeclareLaunchArgument(name='camera_name', default_value="camera0",
                                             description='Attached camera name')
 
@@ -54,6 +63,7 @@ def generate_launch_description():
     R = LaunchConfiguration('R')
     P = LaunchConfiguration('P')
     Y = LaunchConfiguration('Y')
+    gz_world = _gazebo_world_name(LaunchConfiguration('world'))
     # Historical behavior attached camera automatically in physics mode only.
     # Keep that default, but honor an explicit with_camera:=true in teleport mode too.
     with_camera_for_mode = PythonExpression([
@@ -79,7 +89,7 @@ def generate_launch_description():
             executable='create',
             name='spawn_entity',
             arguments=[ 
-                '-world', LaunchConfiguration('world'),               
+                '-world', gz_world,
                 '-name', LaunchConfiguration('name'),
 #                '-robot_namespace', LaunchConfiguration('name'),
 #                '-topic', ['/', LaunchConfiguration('name'), '/robot_description']
