@@ -31,7 +31,7 @@ set +u
 source /opt/ros/jazzy/setup.bash
 
 cd "$WS_ROOT"
-colcon build --packages-select lrs_halmstad --symlink-install
+colcon build --packages-select --allow-overriding lrs_halmstad --symlink-install
 
 source "$WS_ROOT/install/setup.bash"
 source "$WS_ROOT/src/lrs_halmstad/clearpath/setup.bash"

@@ -1,5 +1,5 @@
 import os
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -113,6 +113,7 @@ def _gz_launch(context, *args, **kwargs):
 
 def generate_launch_description():
     pkg_clearpath_gz = get_package_share_directory('clearpath_gz')
+    pkg_gui_plugins_prefix = get_package_prefix('lrs_halmstad_gui_plugins')
     robot_spawn_launch = PathJoinSubstitution([pkg_clearpath_gz, 'launch', 'robot_spawn.launch.py'])
 
     ament_prefix_path = os.getenv('AMENT_PREFIX_PATH', '')
@@ -129,6 +130,20 @@ def generate_launch_description():
             os.path.join(pkg_clearpath_gz, 'meshes') + ':',
             ':' + ':'.join(packages_paths),
         ],
+    )
+
+    gz_gui_plugin_path = SetEnvironmentVariable(
+        name='GZ_GUI_PLUGIN_PATH',
+        value=[
+            os.path.join(pkg_gui_plugins_prefix, 'lib'),
+            ':',
+            EnvironmentVariable('GZ_GUI_PLUGIN_PATH', default_value=''),
+        ],
+    )
+
+    gazebo_world_name = SetEnvironmentVariable(
+        name='LRS_GAZEBO_WORLD',
+        value=_gazebo_world_name(LaunchConfiguration('world')),
     )
 
     clock_bridge = Node(
@@ -155,6 +170,8 @@ def generate_launch_description():
 
     ld = LaunchDescription(ARGUMENTS)
     ld.add_action(gz_sim_resource_path)
+    ld.add_action(gz_gui_plugin_path)
+    ld.add_action(gazebo_world_name)
     ld.add_action(OpaqueFunction(function=_gz_launch))
     ld.add_action(clock_bridge)
     ld.add_action(robot_spawn)
