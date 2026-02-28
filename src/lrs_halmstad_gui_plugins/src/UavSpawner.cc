@@ -1,7 +1,14 @@
 #include "lrs_halmstad_gui_plugins/UavSpawner.hh"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdlib>
+#include <queue>
+#include <set>
 #include <string>
+#include <tuple>
+#include <vector>
 
 #include <ament_index_cpp/get_package_prefix.hpp>
 
@@ -15,6 +22,7 @@
 #include <gz/math/Pose3.hh>
 #include <gz/msgs/Utility.hh>
 #include <gz/msgs/boolean.pb.h>
+#include <gz/msgs/entity.pb.h>
 #include <gz/msgs/entity_factory.pb.h>
 #include <gz/plugin/Register.hh>
 #include <gz/transport/Node.hh>
@@ -24,6 +32,8 @@ namespace lrs_halmstad_gui_plugins
 
 namespace
 {
+
+constexpr double kEpsilon = 1e-6;
 
 std::string ReadText(const tinyxml2::XMLElement *_parent, const char *_name)
 {
@@ -154,6 +164,26 @@ std::string TrimmedSummary(const QString &_text)
   return simplified.left(kLimit).toStdString() + "...";
 }
 
+bool NearlyEqual(double _lhs, double _rhs)
+{
+  return std::abs(_lhs - _rhs) <= kEpsilon;
+}
+
+double EffectiveSpacing(double _configured, double _fallback)
+{
+  if (std::abs(_configured) > kEpsilon)
+  {
+    return _configured;
+  }
+
+  if (std::abs(_fallback) > kEpsilon)
+  {
+    return _fallback;
+  }
+
+  return 2.0;
+}
+
 }  // namespace
 
 UavSpawner::UavSpawner()
@@ -164,15 +194,29 @@ UavSpawner::UavSpawner()
 UavSpawner::~UavSpawner()
 {
   this->StopBridgeProcess(this->setPoseBridgeProcess_.get());
-  for (const auto &process : this->cameraBridgeProcesses_)
+  for (const auto &cameraBridge : this->cameraBridgeProcesses_)
   {
-    this->StopBridgeProcess(process.get());
+    this->StopBridgeProcess(cameraBridge.process.get());
   }
 }
 
 QString UavSpawner::NextName() const
 {
   return QString("%1%2").arg(this->namePrefix_).arg(this->nextIndex_);
+}
+
+QString UavSpawner::NextSpawnPoint() const
+{
+  const auto nextPose = this->SpawnPoseForIndex(this->nextIndex_);
+  return QString("[%1, %2, %3]")
+      .arg(nextPose.Pos().X(), 0, 'f', 1)
+      .arg(nextPose.Pos().Y(), 0, 'f', 1)
+      .arg(nextPose.Pos().Z(), 0, 'f', 1);
+}
+
+bool UavSpawner::CanRemoveLast() const
+{
+  return !this->spawnedUavNames_.empty();
 }
 
 QString UavSpawner::StatusText() const
@@ -183,6 +227,145 @@ QString UavSpawner::StatusText() const
 bool UavSpawner::Busy() const
 {
   return this->busy_;
+}
+
+bool UavSpawner::UseGridSpacing() const
+{
+  return this->useGridSpacing_;
+}
+
+double UavSpawner::GridSpacingX() const
+{
+  return this->gridSpacing_.X();
+}
+
+double UavSpawner::GridSpacingY() const
+{
+  return this->gridSpacing_.Y();
+}
+
+double UavSpawner::GridSpacingZ() const
+{
+  return this->gridSpacing_.Z();
+}
+
+double UavSpawner::CustomSpawnX() const
+{
+  return this->customSpawnPose_.Pos().X();
+}
+
+double UavSpawner::CustomSpawnY() const
+{
+  return this->customSpawnPose_.Pos().Y();
+}
+
+double UavSpawner::CustomSpawnZ() const
+{
+  return this->customSpawnPose_.Pos().Z();
+}
+
+void UavSpawner::SetUseGridSpacing(bool _useGridSpacing)
+{
+  if (this->useGridSpacing_ == _useGridSpacing)
+  {
+    return;
+  }
+
+  this->useGridSpacing_ = _useGridSpacing;
+  this->NotifyPlacementChanged();
+}
+
+void UavSpawner::SetGridSpacingX(double _gridSpacingX)
+{
+  if (NearlyEqual(this->gridSpacing_.X(), _gridSpacingX))
+  {
+    return;
+  }
+
+  this->gridSpacing_.Set(
+      _gridSpacingX,
+      this->gridSpacing_.Y(),
+      this->gridSpacing_.Z());
+  this->NotifyPlacementChanged();
+}
+
+void UavSpawner::SetGridSpacingY(double _gridSpacingY)
+{
+  if (NearlyEqual(this->gridSpacing_.Y(), _gridSpacingY))
+  {
+    return;
+  }
+
+  this->gridSpacing_.Set(
+      this->gridSpacing_.X(),
+      _gridSpacingY,
+      this->gridSpacing_.Z());
+  this->NotifyPlacementChanged();
+}
+
+void UavSpawner::SetGridSpacingZ(double _gridSpacingZ)
+{
+  if (NearlyEqual(this->gridSpacing_.Z(), _gridSpacingZ))
+  {
+    return;
+  }
+
+  this->gridSpacing_.Set(
+      this->gridSpacing_.X(),
+      this->gridSpacing_.Y(),
+      _gridSpacingZ);
+  this->NotifyPlacementChanged();
+}
+
+void UavSpawner::SetCustomSpawnX(double _customSpawnX)
+{
+  if (NearlyEqual(this->customSpawnPose_.Pos().X(), _customSpawnX))
+  {
+    return;
+  }
+
+  this->customSpawnPose_.Set(
+      _customSpawnX,
+      this->customSpawnPose_.Pos().Y(),
+      this->customSpawnPose_.Pos().Z(),
+      this->customSpawnPose_.Rot().Euler().X(),
+      this->customSpawnPose_.Rot().Euler().Y(),
+      this->customSpawnPose_.Rot().Euler().Z());
+  this->NotifyPlacementChanged();
+}
+
+void UavSpawner::SetCustomSpawnY(double _customSpawnY)
+{
+  if (NearlyEqual(this->customSpawnPose_.Pos().Y(), _customSpawnY))
+  {
+    return;
+  }
+
+  this->customSpawnPose_.Set(
+      this->customSpawnPose_.Pos().X(),
+      _customSpawnY,
+      this->customSpawnPose_.Pos().Z(),
+      this->customSpawnPose_.Rot().Euler().X(),
+      this->customSpawnPose_.Rot().Euler().Y(),
+      this->customSpawnPose_.Rot().Euler().Z());
+  this->NotifyPlacementChanged();
+}
+
+void UavSpawner::SetCustomSpawnZ(double _customSpawnZ)
+{
+  if (NearlyEqual(this->customSpawnPose_.Pos().Z(), _customSpawnZ))
+  {
+    return;
+  }
+
+  this->customSpawnPose_.Set(
+      this->customSpawnPose_.Pos().X(),
+      this->customSpawnPose_.Pos().Y(),
+      _customSpawnZ,
+      this->customSpawnPose_.Rot().Euler().X(),
+      this->customSpawnPose_.Rot().Euler().Y(),
+      this->customSpawnPose_.Rot().Euler().Z());
+  this->NotifyPlacementChanged();
 }
 
 void UavSpawner::LoadConfig(const tinyxml2::XMLElement *_pluginElem)
@@ -226,6 +409,8 @@ void UavSpawner::LoadConfig(const tinyxml2::XMLElement *_pluginElem)
   this->bridgeSetPose_ = ReadBool(_pluginElem, "bridge_set_pose", this->bridgeSetPose_);
   this->requestTimeoutMs_ =
       ReadUnsignedInt(_pluginElem, "request_timeout_ms", this->requestTimeoutMs_);
+  this->useGridSpacing_ =
+      ReadBool(_pluginElem, "use_grid_spacing", this->useGridSpacing_);
 
   this->spawnPose_.Set(
       ReadDouble(_pluginElem, "spawn_x", this->spawnPose_.Pos().X()),
@@ -234,13 +419,25 @@ void UavSpawner::LoadConfig(const tinyxml2::XMLElement *_pluginElem)
       ReadDouble(_pluginElem, "spawn_roll", this->spawnPose_.Rot().Euler().X()),
       ReadDouble(_pluginElem, "spawn_pitch", this->spawnPose_.Rot().Euler().Y()),
       ReadDouble(_pluginElem, "spawn_yaw", this->spawnPose_.Rot().Euler().Z()));
+  const double legacyGridSpacingX =
+      ReadDouble(_pluginElem, "spawn_step_x", this->gridSpacing_.X());
+  const double legacyGridSpacingY =
+      ReadDouble(_pluginElem, "spawn_step_y", this->gridSpacing_.Y());
+  const double legacyGridSpacingZ =
+      ReadDouble(_pluginElem, "spawn_step_z", this->gridSpacing_.Z());
+  this->gridSpacing_.Set(
+      ReadDouble(_pluginElem, "grid_spacing_x", legacyGridSpacingX),
+      ReadDouble(_pluginElem, "grid_spacing_y", legacyGridSpacingY),
+      ReadDouble(_pluginElem, "grid_spacing_z", legacyGridSpacingZ));
+  this->customSpawnPose_.Set(
+      ReadDouble(_pluginElem, "custom_spawn_x", this->spawnPose_.Pos().X()),
+      ReadDouble(_pluginElem, "custom_spawn_y", this->spawnPose_.Pos().Y()),
+      ReadDouble(_pluginElem, "custom_spawn_z", this->spawnPose_.Pos().Z()),
+      ReadDouble(_pluginElem, "custom_spawn_roll", this->spawnPose_.Rot().Euler().X()),
+      ReadDouble(_pluginElem, "custom_spawn_pitch", this->spawnPose_.Rot().Euler().Y()),
+      ReadDouble(_pluginElem, "custom_spawn_yaw", this->spawnPose_.Rot().Euler().Z()));
 
-  this->SetStatus(
-      QString("Ready to spawn %1 at (%2, %3, %4).")
-          .arg(this->NextName())
-          .arg(this->spawnPose_.Pos().X(), 0, 'f', 1)
-          .arg(this->spawnPose_.Pos().Y(), 0, 'f', 1)
-          .arg(this->spawnPose_.Pos().Z(), 0, 'f', 1));
+  this->SetStatus(this->NextSpawnSummary());
 }
 
 void UavSpawner::Spawn()
@@ -258,6 +455,7 @@ void UavSpawner::Spawn()
   }
 
   const auto spawnName = this->NextName();
+  const auto spawnPose = this->SpawnPoseForIndex(this->nextIndex_);
   QString sdf;
   QString error;
 
@@ -271,33 +469,97 @@ void UavSpawner::Spawn()
     return;
   }
 
-  if (!this->RequestSpawn(sdf, spawnName.toStdString(), error))
+  if (!this->RequestSpawn(sdf, spawnName.toStdString(), spawnPose, error))
   {
     this->SetStatus(error);
     this->SetBusy(false);
     return;
   }
 
+  this->spawnedUavNames_.push_back(spawnName.toStdString());
+  ++this->nextIndex_;
+  emit this->nextNameChanged();
+  emit this->placementChanged();
+  emit this->spawnedUavsChanged();
+
   if (!this->EnsureSetPoseBridge(error))
   {
-    this->SetStatus(error);
+    this->SetStatus(
+        QString("Spawned %1 in %2, but %3")
+            .arg(spawnName)
+            .arg(QString::fromStdString(worldName))
+            .arg(error));
     this->SetBusy(false);
     return;
   }
 
   if (!this->StartCameraBridge(spawnName.toStdString(), error))
   {
+    this->SetStatus(
+        QString("Spawned %1 in %2, but %3")
+            .arg(spawnName)
+            .arg(QString::fromStdString(worldName))
+            .arg(error));
+    this->SetBusy(false);
+    return;
+  }
+
+  this->SetStatus(
+      QString("Spawned %1 in %2 and bridged it to ROS 2. Next: %3")
+          .arg(spawnName)
+          .arg(QString::fromStdString(worldName))
+          .arg(this->NextSpawnSummary()));
+  this->SetBusy(false);
+}
+
+void UavSpawner::RemoveLast()
+{
+  if (this->busy_)
+  {
+    return;
+  }
+
+  if (this->spawnedUavNames_.empty())
+  {
+    this->SetStatus("No UAV spawned from this panel yet.");
+    return;
+  }
+
+  const auto worldName = this->WorldName();
+  if (worldName.empty())
+  {
+    this->SetStatus("World name is unset. Launch Gazebo through managed_clearpath_sim.");
+    return;
+  }
+
+  const auto name = this->spawnedUavNames_.back();
+  QString error;
+
+  this->SetBusy(true);
+  this->SetStatus(QString("Removing %1...").arg(QString::fromStdString(name)));
+
+  if (!this->RequestRemove(name, error))
+  {
     this->SetStatus(error);
     this->SetBusy(false);
     return;
   }
 
-  ++this->nextIndex_;
+  this->StopCameraBridge(name);
+  this->spawnedUavNames_.pop_back();
+  if (this->nextIndex_ > 0)
+  {
+    --this->nextIndex_;
+  }
+
   emit this->nextNameChanged();
+  emit this->placementChanged();
+  emit this->spawnedUavsChanged();
   this->SetStatus(
-      QString("Spawned %1 in %2 and bridged it to ROS 2.")
-          .arg(spawnName)
-          .arg(QString::fromStdString(worldName)));
+      QString("Removed %1 from %2. Next: %3")
+          .arg(QString::fromStdString(name))
+          .arg(QString::fromStdString(worldName))
+          .arg(this->NextSpawnSummary()));
   this->SetBusy(false);
 }
 
@@ -374,9 +636,53 @@ bool UavSpawner::GenerateSdf(QString &_sdf, QString &_error) const
   return true;
 }
 
+bool UavSpawner::RequestRemove(const std::string &_name, QString &_error) const
+{
+  const auto worldName = this->WorldName();
+  if (worldName.empty())
+  {
+    _error = "World name is unset. Cannot call /world/<name>/remove.";
+    return false;
+  }
+
+  gz::msgs::Entity request;
+  request.set_name(_name);
+  request.set_type(gz::msgs::Entity::MODEL);
+
+  gz::msgs::Boolean reply;
+  bool result = false;
+  gz::transport::Node node;
+  const std::string service = "/world/" + worldName + "/remove";
+
+  const bool executed =
+      node.Request(service, request, this->requestTimeoutMs_, reply, result);
+
+  if (!executed)
+  {
+    _error = QString("Timed out calling %1").arg(QString::fromStdString(service));
+    return false;
+  }
+
+  if (!result)
+  {
+    _error = QString("%1 rejected the remove request")
+                 .arg(QString::fromStdString(service));
+    return false;
+  }
+
+  if (!reply.data())
+  {
+    _error = QString("Gazebo did not remove %1").arg(QString::fromStdString(_name));
+    return false;
+  }
+
+  return true;
+}
+
 bool UavSpawner::RequestSpawn(
     const QString &_sdf,
     const std::string &_name,
+    const gz::math::Pose3d &_pose,
     QString &_error) const
 {
   const auto worldName = this->WorldName();
@@ -391,7 +697,7 @@ bool UavSpawner::RequestSpawn(
   request.set_allow_renaming(this->allowRenaming_);
   request.set_sdf(_sdf.toStdString());
   request.set_relative_to(this->relativeTo_);
-  gz::msgs::Set(request.mutable_pose(), this->spawnPose_);
+  gz::msgs::Set(request.mutable_pose(), _pose);
 
   gz::msgs::Boolean reply;
   bool result = false;
@@ -506,7 +812,8 @@ bool UavSpawner::StartCameraBridge(const std::string &_name, QString &_error)
     return false;
   }
 
-  this->cameraBridgeProcesses_.push_back(std::move(process));
+  this->cameraBridgeProcesses_.push_back(
+      CameraBridgeProcess{_name, std::move(process)});
   return true;
 }
 
@@ -541,6 +848,134 @@ std::string UavSpawner::PackageExecutable(
   return executablePath;
 }
 
+std::tuple<int, int, int> UavSpawner::GridCellForIndex(int _index) const
+{
+  if (_index <= 0)
+  {
+    return {0, 0, 0};
+  }
+
+  const bool useVerticalSpacing = std::abs(this->gridSpacing_.Z()) > kEpsilon;
+  const std::array<std::tuple<int, int, int>, 26> neighborOrder{{
+      {0, 1, 0},
+      {0, -1, 0},
+      {-1, 0, 0},
+      {1, 0, 0},
+      {0, 0, -1},
+      {0, 0, 1},
+      {-1, 1, 0},
+      {-1, -1, 0},
+      {1, 1, 0},
+      {1, -1, 0},
+      {-1, 0, -1},
+      {-1, 0, 1},
+      {1, 0, -1},
+      {1, 0, 1},
+      {0, 1, -1},
+      {0, 1, 1},
+      {0, -1, -1},
+      {0, -1, 1},
+      {-1, 1, -1},
+      {-1, 1, 1},
+      {-1, -1, -1},
+      {-1, -1, 1},
+      {1, 1, -1},
+      {1, 1, 1},
+      {1, -1, -1},
+      {1, -1, 1},
+  }};
+
+  std::queue<std::tuple<int, int, int>> pending;
+  std::set<std::tuple<int, int, int>> visited;
+  pending.push({0, 0, 0});
+  visited.insert({0, 0, 0});
+
+  int currentIndex = 0;
+  while (!pending.empty())
+  {
+    const auto cell = pending.front();
+    pending.pop();
+
+    if (currentIndex == _index)
+    {
+      return cell;
+    }
+
+    ++currentIndex;
+    for (const auto &direction : neighborOrder)
+    {
+      if (!useVerticalSpacing && std::get<2>(direction) != 0)
+      {
+        continue;
+      }
+
+      const std::tuple<int, int, int> nextCell{
+          std::get<0>(cell) + std::get<0>(direction),
+          std::get<1>(cell) + std::get<1>(direction),
+          std::get<2>(cell) + std::get<2>(direction),
+      };
+      if (visited.insert(nextCell).second)
+      {
+        pending.push(nextCell);
+      }
+    }
+  }
+
+  return {0, 0, 0};
+}
+
+gz::math::Pose3d UavSpawner::SpawnPoseForIndex(int _index) const
+{
+  if (!this->useGridSpacing_)
+  {
+    return this->customSpawnPose_;
+  }
+
+  const auto cell = this->GridCellForIndex(_index);
+  const double forwardSpacing =
+      EffectiveSpacing(this->gridSpacing_.X(), this->gridSpacing_.Y());
+  const double lateralSpacing =
+      EffectiveSpacing(this->gridSpacing_.Y(), this->gridSpacing_.X());
+  const double verticalSpacing = this->gridSpacing_.Z();
+
+  const gz::math::Vector3d localOffset{
+      static_cast<double>(std::get<0>(cell)) * forwardSpacing,
+      static_cast<double>(std::get<1>(cell)) * lateralSpacing,
+      static_cast<double>(std::get<2>(cell)) * verticalSpacing,
+  };
+  const auto worldOffset = this->spawnPose_.Rot().RotateVector(localOffset);
+
+  return gz::math::Pose3d{
+      this->spawnPose_.Pos() + worldOffset,
+      this->spawnPose_.Rot(),
+  };
+}
+
+void UavSpawner::NotifyPlacementChanged()
+{
+  emit this->placementChanged();
+  this->SetStatus(this->NextSpawnSummary());
+}
+
+void UavSpawner::StopCameraBridge(const std::string &_name)
+{
+  const auto it = std::find_if(
+      this->cameraBridgeProcesses_.begin(),
+      this->cameraBridgeProcesses_.end(),
+      [&_name](const CameraBridgeProcess &_cameraBridge)
+      {
+        return _cameraBridge.name == _name;
+      });
+
+  if (it == this->cameraBridgeProcesses_.end())
+  {
+    return;
+  }
+
+  this->StopBridgeProcess(it->process.get());
+  this->cameraBridgeProcesses_.erase(it);
+}
+
 std::string UavSpawner::WorldName() const
 {
   if (!this->configuredWorldName_.empty())
@@ -555,6 +990,16 @@ std::string UavSpawner::WorldName() const
   }
 
   return worldName;
+}
+
+QString UavSpawner::NextSpawnSummary() const
+{
+  const auto nextPose = this->SpawnPoseForIndex(this->nextIndex_);
+  return QString("%1 at (%2, %3, %4)")
+      .arg(this->NextName())
+      .arg(nextPose.Pos().X(), 0, 'f', 1)
+      .arg(nextPose.Pos().Y(), 0, 'f', 1)
+      .arg(nextPose.Pos().Z(), 0, 'f', 1);
 }
 
 void UavSpawner::StopBridgeProcess(QProcess *_process)
@@ -602,4 +1047,7 @@ GZ_ADD_PLUGIN(
     lrs_halmstad_gui_plugins::UavSpawner,
     gz::gui::Plugin)
 
-GZ_ADD_PLUGIN_ALIAS(lrs_halmstad_gui_plugins::UavSpawner, "UavSpawner")
+GZ_ADD_PLUGIN_ALIAS(
+    lrs_halmstad_gui_plugins::UavSpawner,
+    "UavSpawner",
+    "UAV spawner")

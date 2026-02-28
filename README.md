@@ -179,12 +179,14 @@ Default behavior:
 - Streams snapshot data from:
   - `/a201_0000/platform/odom` as model `robot`
   - `/dji0/pose_cmd/odom` as model `dji0`
+- Auto-discovers any additional `/<model>/pose_cmd/odom` topics and exposes them as model `<model>`
 
 Override bridge parameters:
 ```bash
 ros2 run lrs_halmstad gazebo_pose_tcp_bridge --ros-args \
   -p bind_host:=127.0.0.1 \
   -p port:=5555 \
+  -p auto_discover_pose_cmd_odom:=true \
   -p odom_topics:="['/a201_0000/platform/odom','/dji0/pose_cmd/odom']" \
   -p model_names:="['robot','dji0']"
 ```
@@ -194,6 +196,7 @@ ros2 run lrs_halmstad gazebo_pose_tcp_bridge --ros-args \
 - `model_name:=<name>` (legacy single-model fallback)
 - `odom_topics:=['<topic1>','<topic2>', ...]`
 - `model_names:=['<name1>','<name2>', ...]` (same length as `odom_topics`)
+- `auto_discover_pose_cmd_odom:=true|false` (default `true`; discovers `/<model>/pose_cmd/odom`)
 - `bind_host:=<ip>` (default `127.0.0.1`)
 - `port:=<tcp_port>` (default `5555`)
 - `stale_timeout_sec:=<seconds>` (default `2.0`)
