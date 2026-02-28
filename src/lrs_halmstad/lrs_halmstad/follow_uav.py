@@ -19,6 +19,8 @@ from std_msgs.msg import String, Float32
 
 from ros_gz_interfaces.srv import SetEntityPose
 
+from lrs_halmstad.world_names import gazebo_world_name
+
 
 @dataclass
 class Pose2D:
@@ -94,6 +96,10 @@ class FollowUav(Node):
         self.declare_parameter("d_target", 5.0)
         self.declare_parameter("d_max", 15.0)
         self.declare_parameter("z_alt", 10.0)
+        self.declare_parameter("seed_uav_cmd_on_start", True)
+        self.declare_parameter("uav_start_x", 0.0, dyn_num)
+        self.declare_parameter("uav_start_y", 0.0, dyn_num)
+        self.declare_parameter("uav_start_yaw_deg", 0.0, dyn_num)
 
         self.declare_parameter("follow_yaw", True)
 
@@ -139,6 +145,7 @@ class FollowUav(Node):
 
         # ---------- Read params ----------
         self.world = str(self.get_parameter("world").value)
+        self.gz_world = gazebo_world_name(self.world)
         self.uav_name = str(self.get_parameter("uav_name").value)
         self.leader_input_type = str(self.get_parameter("leader_input_type").value).strip().lower()
         self.leader_odom_topic = str(self.get_parameter("leader_odom_topic").value)
@@ -153,6 +160,10 @@ class FollowUav(Node):
         self.d_target = float(self.get_parameter("d_target").value)
         self.d_max = float(self.get_parameter("d_max").value)
         self.z_alt = float(self.get_parameter("z_alt").value)
+        self.seed_uav_cmd_on_start = bool(self.get_parameter("seed_uav_cmd_on_start").value)
+        self.uav_start_x = float(self.get_parameter("uav_start_x").value)
+        self.uav_start_y = float(self.get_parameter("uav_start_y").value)
+        self.uav_start_yaw = math.radians(float(self.get_parameter("uav_start_yaw_deg").value))
 
         self.follow_yaw = bool(self.get_parameter("follow_yaw").value)
 
@@ -254,8 +265,8 @@ class FollowUav(Node):
         self.stale_latched = False
 
         # Commanded UAV pose (deterministic internal state)
-        self.uav_cmd = Pose2D(0.0, 0.0, 0.0)
-        self.have_uav_cmd = False
+        self.uav_cmd = Pose2D(self.uav_start_x, self.uav_start_y, self.uav_start_yaw)
+        self.have_uav_cmd = bool(self.seed_uav_cmd_on_start)
 
         self.last_cmd_time: Optional[Time] = None
         self.pending_futures = []
@@ -329,7 +340,7 @@ class FollowUav(Node):
             Float32, f"{self.metrics_prefix}/follow_tracking_error_cmd", 10
         )
 
-        srv_name = f"/world/{self.world}/set_pose"
+        srv_name = f"/world/{self.gz_world}/set_pose"
         self.cli = self.create_client(SetEntityPose, srv_name)
         self.get_logger().info(f"[follow_uav] Waiting for service: {srv_name}")
         while not self.cli.wait_for_service(timeout_sec=1.0):
@@ -344,6 +355,8 @@ class FollowUav(Node):
             f"d_target={self.d_target}, d_max={self.d_max}, z={self.z_alt}, "
             f"pose_timeout_s={self.pose_timeout_s}, min_cmd_period_s={self.min_cmd_period_s}, "
             f"smooth_alpha={self.smooth_alpha}, max_step_m_per_tick={self.max_step_m_per_tick}, "
+            f"seed_uav_cmd_on_start={self.seed_uav_cmd_on_start}, "
+            f"uav_start=({self.uav_start_x:.2f},{self.uav_start_y:.2f},{math.degrees(self.uav_start_yaw):.1f}deg), "
             f"cmd_xy_deadband_m={self.cmd_xy_deadband_m}, max_yaw_step_rad_per_tick={self.max_yaw_step_rad_per_tick}, "
             f"yaw_deadband_rad={self.yaw_deadband_rad}, yaw_update_xy_gate_m={self.yaw_update_xy_gate_m}, "
             f"quality_scale_enable={self.quality_scale_enable}, leader_status_topic={self.leader_status_topic}, "
@@ -433,6 +446,11 @@ class FollowUav(Node):
 
     def _leader_status_state(self) -> str:
         return str(self.last_leader_status_fields.get("state", "")).strip()
+
+    def _freeze_yaw_for_status(self) -> bool:
+        if self.leader_input_type != "pose":
+            return False
+        return self._leader_status_state() in {"REJECT_HOLD", "REJECT_DEBOUNCE_HOLD"}
 
     def _set_follow_state(self, new_state: str) -> None:
         if new_state == self.follow_state:
@@ -799,6 +817,7 @@ class FollowUav(Node):
         ugv = self.ugv_pose
         leader_for_follow = self._leader_pose_for_follow()
         quality_scale, quality_tag = self._quality_scale_from_status(now)
+        freeze_yaw_for_status = self._freeze_yaw_for_status()
         desired_follow_state = self._classify_follow_state(quality_scale)
         self._update_follow_state(desired_follow_state)
 
@@ -861,8 +880,21 @@ class FollowUav(Node):
         if self.have_uav_cmd:
             cmd_xy_delta = math.hypot(xt - self.uav_cmd.x, yt - self.uav_cmd.y)
 
-        yaw_cmd = leader_for_follow.yaw if self.follow_yaw else (self.uav_cmd.yaw if self.have_uav_cmd else leader_for_follow.yaw)
+        if self.follow_yaw:
+            # Face the leader from the commanded UAV position so a fixed camera stays centered.
+            los_dx = leader_for_follow.x - xt
+            los_dy = leader_for_follow.y - yt
+            if math.hypot(los_dx, los_dy) > 1e-6:
+                yaw_cmd = math.atan2(los_dy, los_dx)
+            else:
+                yaw_cmd = self.uav_cmd.yaw if self.have_uav_cmd else leader_for_follow.yaw
+        else:
+            yaw_cmd = self.uav_cmd.yaw if self.have_uav_cmd else leader_for_follow.yaw
         if self.follow_state in ("HOLD", "DEGRADED") and self.have_uav_cmd:
+            yaw_cmd = self.uav_cmd.yaw
+        elif freeze_yaw_for_status and self.have_uav_cmd:
+            # Held reject states use stale geometry; keep the current camera heading
+            # instead of swinging toward a potentially wrong reacquire target.
             yaw_cmd = self.uav_cmd.yaw
         elif self.have_uav_cmd and self.leader_input_type == "pose" and self.quality_scale_enable and quality_scale <= self.quality_hold_step_scale:
             yaw_cmd = self.uav_cmd.yaw

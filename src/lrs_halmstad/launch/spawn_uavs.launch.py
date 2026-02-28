@@ -8,7 +8,17 @@ from launch.actions import IncludeLaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
+
+
+def _gazebo_world_name(world_sub):
+    return PythonExpression([
+        "'office_construction' if '",
+        world_sub,
+        "' == 'construction' else '",
+        world_sub,
+        "'",
+    ])
 
 
 world_arg = DeclareLaunchArgument('world', default_value='orchard',
@@ -25,6 +35,8 @@ uav_mode_arg = DeclareLaunchArgument('uav_mode', default_value='teleport',
                       description='UAV mode: teleport (deterministic) or physics')
 
 def generate_launch_description():
+    gz_world = _gazebo_world_name(LaunchConfiguration('world'))
+
     dji0 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(
@@ -76,7 +88,7 @@ def generate_launch_description():
         executable='parameter_bridge',
 #        arguments= ['/world/orchard/set_pose@ros_gz_interfaces/srv/SetEntityPose'],
         arguments=[
-            ['/world/', LaunchConfiguration('world'),'/set_pose@ros_gz_interfaces/srv/SetEntityPose']
+            ['/world/', gz_world, '/set_pose@ros_gz_interfaces/srv/SetEntityPose']
         ],
         output='screen'
     )

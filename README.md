@@ -1,9 +1,4 @@
 # Halmstad ROS 2 + Gazebo Testbed — Workspace Snapshot
-
-Status
-------
-This repository is a source-only snapshot of the Halmstad Stage-1 robotics testbed (ROS 2 Jazzy + Gazebo). It intentionally excludes build artifacts, runtime outputs, and virtual environments so it stays lightweight and clone-ready.
-
 Running experiments (current runbook)
 -------------------------------------
 This section documents the commands currently used to run the Halmstad Gazebo + ROS 2 simulation stack, spawn UAVs, start movement/follow logic, and start the OMNeT TCP bridge.
@@ -54,15 +49,6 @@ ros2 launch lrs_halmstad run_round_motion.launch.py
 4. Start OMNeT pose bridge (TCP pose snapshots from ROS odom topics):
 ```bash
 ros2 run lrs_halmstad gazebo_pose_tcp_bridge
-```
-
-5. Optional checks: Visualizing lidar of Husky in Rviz2
-```bash
-rviz2 -d ~/halmstad_ws/src/lrs_halmstad/clearpath/husky.rviz --ros-args -r /tf:=/a201_0000/tf -r /tf_static:=/a201_0000/tf_static -p use_sim_time:=true
-```
-6. View camera feed (images) of UGV and UAV
-```bash
-ros2 run  rqt_image_view rqt_image_view dummy
 ```
 
 Gazebo + UGV simulation (GUI)
@@ -163,7 +149,7 @@ ros2 launch lrs_halmstad run_round_follow_motion.launch.py \
 - `leader_camera_info_topic:=<topic>` (default `/<uav_name>/camera0/camera_info`)
 - `leader_depth_topic:=<topic>` (default empty / disabled)
 - `leader_uav_pose_topic:=<topic>` (default `/<uav_name>/pose_cmd`)
-- `yolo_weights:=<weights.pt>` (default `$HOME/halmstad_ws/models/yolov5n.pt`)
+- `yolo_weights:=<weights.pt>` (default `/home/ruben/halmstad_ws/models/yolov5n.pt`)
 - `yolo_device:=cpu|cuda` (default `cpu`)
 - `event_topic:=<topic>` (default `/coord/events`)
 - `ugv_start_delay_s:=<seconds>` (default `0.0`; readiness gate handles startup)
@@ -227,32 +213,3 @@ ros2 run lrs_halmstad pose_cmd_to_odom
 - `frame_id:=<frame>` (default empty = copy from pose header)
 - `child_frame_id:=<frame>` (default `base_link`)
 - `copy_header_stamp:=true|false` (default `true`)
-
-Design recommendations preserved here
-------------------------------------
-- Keep build artifacts out of Git (build/, install/, log/).
-- Keep runtime data out of Git (runs/, bags, large binary outputs).
-- Keep the repo source-only and reproducible by rosdep + colcon.
-
-Git push guidance
------------------
-To push to your GitHub repo and overwrite a remote branch safely:
-```bash
-git remote add origin https://github.com/Lobbeb/halmstad_ws.git
-git branch -M main
-git push --force-with-lease -u origin main
-```
-Use `--force-with-lease` rather than `--force` to reduce accidental overwrites.
-
-If the repo should keep additional packages (e.g. `lrs_omnet_bridge`) make sure they exist under `src/` before committing.
-
-Troubleshooting
----------------
-- Missing rclpy in editor: see VS Code tips above.
-- rosdep failures: ensure `sudo apt update` and ROS 2 apt repos configured.
-- colcon build errors: inspect `log/` for failing package build logs; run `colcon build --event-handlers console_cohesion+` for clearer output.
-
-Security & large files
-----------------------
-- Do not commit `install/`, `build/`, `log/` or binary bags — they bloat the repo.
-- Use Git LFS only if very large binary artifacts must be versioned.

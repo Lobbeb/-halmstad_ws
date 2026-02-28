@@ -11,6 +11,8 @@ from rclpy.node import Node
 from ros_gz_interfaces.srv import SetEntityPose
 from tf_transformations import quaternion_from_euler
 
+from lrs_halmstad.world_names import gazebo_world_name
+
 
 class UavSetposeSweep(Node):
     def __init__(self) -> None:
@@ -33,6 +35,7 @@ class UavSetposeSweep(Node):
         self.declare_parameter("log_csv", "")
 
         self.world = str(self.get_parameter("world").value)
+        self.gz_world = gazebo_world_name(self.world)
         self.uav_name = str(self.get_parameter("uav_name").value)
         self.x_min = float(self.get_parameter("x_min").value)
         self.x_max = float(self.get_parameter("x_max").value)
@@ -48,7 +51,7 @@ class UavSetposeSweep(Node):
         self.start_delay_s = max(0.0, float(self.get_parameter("start_delay_s").value))
         self.log_csv = str(self.get_parameter("log_csv").value)
 
-        self._cli = self.create_client(SetEntityPose, f"/world/{self.world}/set_pose")
+        self._cli = self.create_client(SetEntityPose, f"/world/{self.gz_world}/set_pose")
 
     def _wait_service(self) -> bool:
         deadline = time.monotonic() + self.service_wait_s
@@ -57,7 +60,7 @@ class UavSetposeSweep(Node):
                 return True
             remaining = max(0.0, deadline - time.monotonic())
             self.get_logger().info(
-                f"Waiting for /world/{self.world}/set_pose (remaining ~{remaining:.0f}s)"
+                f"Waiting for /world/{self.gz_world}/set_pose (remaining ~{remaining:.0f}s)"
             )
         return False
 
@@ -95,7 +98,7 @@ class UavSetposeSweep(Node):
 
     def run(self) -> int:
         if not self._wait_service():
-            self.get_logger().error(f"Service /world/{self.world}/set_pose not available")
+            self.get_logger().error(f"Service /world/{self.gz_world}/set_pose not available")
             return 2
 
         if self.start_delay_s > 0.0:

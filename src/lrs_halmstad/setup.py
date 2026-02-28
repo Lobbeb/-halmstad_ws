@@ -82,7 +82,6 @@ setup(
             "pose_cmd_to_odom = lrs_halmstad.pose_cmd_to_odom:main",
             "uav_setpose_sweep = lrs_halmstad.uav_setpose_sweep:main",
             "ugv_motion_driver = lrs_halmstad.ugv_motion_driver:main",
-
               # optional later:
               # 'metrics_node = lrs_halmstad.metrics_node:main',
         ],

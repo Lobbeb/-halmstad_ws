@@ -18,7 +18,8 @@ def generate_launch_description():
     )
     world_arg = DeclareLaunchArgument('world', default_value='orchard')
     uav_name_arg = DeclareLaunchArgument('uav_name', default_value='dji0')
-    ugv_cmd_topic_arg = DeclareLaunchArgument('ugv_cmd_topic', default_value='/a201_0000/cmd_vel')
+    ugv_namespace_arg = DeclareLaunchArgument('ugv_namespace', default_value='a201_0000')
+    ugv_cmd_topic_arg = DeclareLaunchArgument('ugv_cmd_topic', default_value='cmd_vel')
     uav_log_csv_arg = DeclareLaunchArgument('uav_log_csv', default_value='')
 
     uav_node = Node(
@@ -40,6 +41,7 @@ def generate_launch_description():
         package='lrs_halmstad',
         executable='ugv_motion_driver',
         name='ugv_motion_driver',
+        namespace=LaunchConfiguration('ugv_namespace'),
         output='screen',
         parameters=[
             LaunchConfiguration('params_file'),
@@ -53,7 +55,7 @@ def generate_launch_description():
         OnProcessExit(
             target_action=uav_node,
             on_exit=[
-                LogInfo(msg='[run_round_motion] UAV sweep finished; starting UGV motion driver'),
+                LogInfo(msg='[run_sweep_motion] UAV sweep finished; starting UGV motion driver'),
                 ugv_node,
             ],
         )
@@ -64,6 +66,7 @@ def generate_launch_description():
             params_file_arg,
             world_arg,
             uav_name_arg,
+            ugv_namespace_arg,
             ugv_cmd_topic_arg,
             uav_log_csv_arg,
             uav_node,

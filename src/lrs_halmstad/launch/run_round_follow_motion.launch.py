@@ -46,13 +46,23 @@ def generate_launch_description():
         default_value='auto',
         description="auto|true|false; auto starts estimator for pose/estimate, perception mode, or when yolo_weights is set",
     )
-    ugv_cmd_topic_arg = DeclareLaunchArgument('ugv_cmd_topic', default_value='/a201_0000/cmd_vel')
-    ugv_odom_topic_arg = DeclareLaunchArgument('ugv_odom_topic', default_value='/a201_0000/platform/odom')
+    uav_start_x_arg = DeclareLaunchArgument('uav_start_x', default_value='-2.0')
+    uav_start_y_arg = DeclareLaunchArgument('uav_start_y', default_value='0.0')
+    uav_start_yaw_deg_arg = DeclareLaunchArgument('uav_start_yaw_deg', default_value='0.0')
+    ugv_namespace_arg = DeclareLaunchArgument('ugv_namespace', default_value='a201_0000')
+    ugv_cmd_topic_arg = DeclareLaunchArgument('ugv_cmd_topic', default_value='cmd_vel')
+    ugv_odom_topic_arg = DeclareLaunchArgument(
+        'ugv_odom_topic',
+        default_value=['/', LaunchConfiguration('ugv_namespace'), '/platform/odom'],
+    )
     leader_image_topic_arg = DeclareLaunchArgument('leader_image_topic', default_value=['/', LaunchConfiguration('uav_name'), '/camera0/image_raw'])
     leader_camera_info_topic_arg = DeclareLaunchArgument('leader_camera_info_topic', default_value=['/', LaunchConfiguration('uav_name'), '/camera0/camera_info'])
     leader_depth_topic_arg = DeclareLaunchArgument('leader_depth_topic', default_value='')
     leader_uav_pose_topic_arg = DeclareLaunchArgument('leader_uav_pose_topic', default_value=['/', LaunchConfiguration('uav_name'), '/pose_cmd'])
-    yolo_weights_arg = DeclareLaunchArgument('yolo_weights', default_value='/home/ruben/halmstad_ws/models/yolov5n.pt')
+    yolo_weights_arg = DeclareLaunchArgument(
+        'yolo_weights',
+        default_value='/home/ruben/halmstad_ws/models/yolo26/yolo26n.pt',
+    )
     yolo_device_arg = DeclareLaunchArgument('yolo_device', default_value='cpu')
     event_topic_arg = DeclareLaunchArgument('event_topic', default_value='/coord/events')
     # Fallback delay only. The primary startup gating now happens inside
@@ -92,6 +102,9 @@ def generate_launch_description():
                 'uav_name': LaunchConfiguration('uav_name'),
                 'leader_input_type': LaunchConfiguration('leader_mode'),
                 'leader_odom_topic': LaunchConfiguration('ugv_odom_topic'),
+                'uav_start_x': LaunchConfiguration('uav_start_x'),
+                'uav_start_y': LaunchConfiguration('uav_start_y'),
+                'uav_start_yaw_deg': LaunchConfiguration('uav_start_yaw_deg'),
                 'event_topic': LaunchConfiguration('event_topic'),
             },
         ],
@@ -101,6 +114,7 @@ def generate_launch_description():
         package='lrs_halmstad',
         executable='ugv_motion_driver',
         name='ugv_motion_driver',
+        namespace=LaunchConfiguration('ugv_namespace'),
         output='screen',
         parameters=[
             LaunchConfiguration('params_file'),
@@ -130,6 +144,10 @@ def generate_launch_description():
         leader_mode_arg,
         leader_perception_enable_arg,
         start_estimator_arg,
+        uav_start_x_arg,
+        uav_start_y_arg,
+        uav_start_yaw_deg_arg,
+        ugv_namespace_arg,
         ugv_cmd_topic_arg,
         ugv_odom_topic_arg,
         leader_image_topic_arg,

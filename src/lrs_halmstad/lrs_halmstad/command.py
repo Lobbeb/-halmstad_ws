@@ -12,6 +12,8 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from tf_transformations import quaternion_from_euler, quaternion_multiply
 from ros_gz_interfaces.srv import SetEntityPose
 
+from lrs_halmstad.world_names import gazebo_world_name
+
 class GzCommand(Node):
     def __init__(self):    
         super().__init__('gz_command')
@@ -29,6 +31,7 @@ class GzCommand(Node):
         
         self.command = self.get_parameter("command").value
         self.world = self.get_parameter("world").value
+        self.gz_world = gazebo_world_name(self.world)
         self.name = self.get_parameter("name").value
         self.x = self.get_parameter("x").value
         self.y = self.get_parameter("y").value
@@ -37,15 +40,15 @@ class GzCommand(Node):
         self.yaw = self.get_parameter("yaw").value
 
         self.init_scan_flag = True
-        self.cli = self.create_client(SetEntityPose, f'/world/{self.world}/set_pose', callback_group=self.group)
+        self.cli = self.create_client(SetEntityPose, f'/world/{self.gz_world}/set_pose', callback_group=self.group)
         max_wait_s = 10.0
         waited = 0.0
-        print(f"WAIT for service: /world/{self.world}/set_pose")
+        print(f"WAIT for service: /world/{self.gz_world}/set_pose")
         while not self.cli.wait_for_service(timeout_sec=1.0):
             waited += 1.0
             self.get_logger().info(f"service not available, waiting... ({waited:.0f}/{max_wait_s:.0f}s)")
             if waited >= max_wait_s:
-                raise RuntimeError(f"Service /world/{self.world}/set_pose not available after {max_wait_s:.0f}s")
+                raise RuntimeError(f"Service /world/{self.gz_world}/set_pose not available after {max_wait_s:.0f}s")
         self.timer = self.create_timer(0.1, self.do_command, callback_group=self.group)
 
     def set_pose(self, name, x, y, z, yaw_deg):

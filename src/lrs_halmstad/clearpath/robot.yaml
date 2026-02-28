@@ -11,7 +11,7 @@ system:
     namespace: a201_0000
     domain_id: 3
     rmw_implementation: rmw_fastrtps_cpp
-    workspaces: []
+    workspaces: [/home/ruben/halmstad_ws/install, /home/ruben/halmstad_ws/src/lrs_halmstad/clearpath]
 platform:
   controller: logitech
   battery:
