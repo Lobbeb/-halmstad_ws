@@ -962,8 +962,15 @@ def main(args=None):
             node.emit_event("FOLLOW_NODE_SHUTDOWN")
         except Exception:
             pass
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        try:
+            if rclpy.ok():
+                rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

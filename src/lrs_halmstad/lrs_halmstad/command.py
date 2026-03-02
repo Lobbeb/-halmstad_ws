@@ -9,8 +9,24 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
-from tf_transformations import quaternion_from_euler, quaternion_multiply
 from ros_gz_interfaces.srv import SetEntityPose
+
+from lrs_halmstad.world_names import gazebo_world_name
+
+
+def _quaternion_from_euler(roll: float, pitch: float, yaw: float) -> tuple[float, float, float, float]:
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    w = cr * cp * cy + sr * sp * sy
+    x = sr * cp * cy - cr * sp * sy
+    y = cr * sp * cy + sr * cp * sy
+    z = cr * cp * sy - sr * sp * cy
+    return (x, y, z, w)
+
 
 class GzCommand(Node):
     def __init__(self):    
@@ -29,6 +45,7 @@ class GzCommand(Node):
         
         self.command = self.get_parameter("command").value
         self.world = self.get_parameter("world").value
+        self.gz_world = gazebo_world_name(self.world)
         self.name = self.get_parameter("name").value
         self.x = self.get_parameter("x").value
         self.y = self.get_parameter("y").value
@@ -37,21 +54,21 @@ class GzCommand(Node):
         self.yaw = self.get_parameter("yaw").value
 
         self.init_scan_flag = True
-        self.cli = self.create_client(SetEntityPose, f'/world/{self.world}/set_pose', callback_group=self.group)
+        self.cli = self.create_client(SetEntityPose, f'/world/{self.gz_world}/set_pose', callback_group=self.group)
         max_wait_s = 10.0
         waited = 0.0
-        print(f"WAIT for service: /world/{self.world}/set_pose")
+        print(f"WAIT for service: /world/{self.gz_world}/set_pose")
         while not self.cli.wait_for_service(timeout_sec=1.0):
             waited += 1.0
             self.get_logger().info(f"service not available, waiting... ({waited:.0f}/{max_wait_s:.0f}s)")
             if waited >= max_wait_s:
-                raise RuntimeError(f"Service /world/{self.world}/set_pose not available after {max_wait_s:.0f}s")
+                raise RuntimeError(f"Service /world/{self.gz_world}/set_pose not available after {max_wait_s:.0f}s")
         self.timer = self.create_timer(0.1, self.do_command, callback_group=self.group)
 
     def set_pose(self, name, x, y, z, yaw_deg):
         try:
             robot_request = SetEntityPose.Request()
-            quat1 = quaternion_from_euler(0.0, 0.0, math.radians(self.yaw))
+            quat1 = _quaternion_from_euler(0.0, 0.0, math.radians(yaw_deg))
             robot_request.entity.id = 0
             robot_request.entity.name = name
             robot_request.entity.type = robot_request.entity.MODEL
@@ -69,7 +86,7 @@ class GzCommand(Node):
     def set_camera(self, name, x, y, z, pitch):
         try:
             camera_request = SetEntityPose.Request()
-            quat2 = quaternion_from_euler(0.0, -math.radians(self.pitch), 0.0)
+            quat2 = _quaternion_from_euler(0.0, -math.radians(pitch), 0.0)
             camera_request.entity.id = 0
             camera_request.entity.name = name
             camera_request.entity.type = camera_request.entity.MODEL

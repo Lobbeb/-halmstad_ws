@@ -9,7 +9,20 @@ from typing import List
 import rclpy
 from rclpy.node import Node
 from ros_gz_interfaces.srv import SetEntityPose
-from tf_transformations import quaternion_from_euler
+
+
+def _quaternion_from_euler(roll: float, pitch: float, yaw: float) -> tuple[float, float, float, float]:
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    w = cr * cp * cy + sr * sp * sy
+    x = sr * cp * cy - cr * sp * sy
+    y = cr * sp * cy + sr * cp * sy
+    z = cr * cp * sy - sr * sp * cy
+    return (x, y, z, w)
 
 
 class UavSetposeSweep(Node):
@@ -70,7 +83,7 @@ class UavSetposeSweep(Node):
 
     def _call_setpose(self, x: float, y: float, z: float, yaw_deg: float) -> bool:
         req = SetEntityPose.Request()
-        q = quaternion_from_euler(0.0, 0.0, math.radians(yaw_deg))
+        q = _quaternion_from_euler(0.0, 0.0, math.radians(yaw_deg))
         req.entity.id = 0
         req.entity.name = self.uav_name
         req.entity.type = req.entity.MODEL

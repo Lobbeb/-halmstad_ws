@@ -1,6 +1,8 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, LogInfo, TimerAction
+from launch.actions import DeclareLaunchArgument, EmitEvent, LogInfo, RegisterEventHandler, TimerAction
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -58,6 +60,11 @@ def generate_launch_description():
     # Fallback delay only. The primary startup gating now happens inside
     # ugv_motion_driver via a lightweight readiness check (cmd subscriber + odom flow).
     ugv_start_delay_arg = DeclareLaunchArgument('ugv_start_delay_s', default_value='0.0')
+    shutdown_when_ugv_done_arg = DeclareLaunchArgument(
+        'shutdown_when_ugv_done',
+        default_value='false',
+        description='If true, stop this launch when ugv_motion_driver exits.',
+    )
 
     estimator_node = Node(
         package='lrs_halmstad',
@@ -123,6 +130,17 @@ def generate_launch_description():
         ],
     )
 
+    shutdown_on_ugv_done = RegisterEventHandler(
+        OnProcessExit(
+            target_action=ugv_node,
+            on_exit=[
+                LogInfo(msg='[run_round_follow_motion] ugv_motion_driver exited; shutting down launch'),
+                EmitEvent(event=Shutdown(reason='UGV motion complete')),
+            ],
+        ),
+        condition=IfCondition(LaunchConfiguration('shutdown_when_ugv_done')),
+    )
+
     return LaunchDescription([
         params_file_arg,
         world_arg,
@@ -140,7 +158,9 @@ def generate_launch_description():
         yolo_device_arg,
         event_topic_arg,
         ugv_start_delay_arg,
+        shutdown_when_ugv_done_arg,
         estimator_node,
         follow_node,
         ugv_delayed_start,
+        shutdown_on_ugv_done,
     ])
