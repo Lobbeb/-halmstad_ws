@@ -15,7 +15,8 @@ from rcl_interfaces.msg import ParameterDescriptor
 
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import String, Float32
+from sensor_msgs.msg import Joy
+from std_msgs.msg import String, Float32, Float64
 
 from ros_gz_interfaces.srv import SetEntityPose
 
@@ -92,9 +93,23 @@ class FollowUav(Node):
         # ---------- Parameters ----------
         self.declare_parameter("world", "orchard")
         self.declare_parameter("uav_name", "dji0")
+        self.declare_parameter("uav_backend", "setpose")
         self.declare_parameter("camera_name", "camera0")
         self.declare_parameter("camera_pitch_deg", -45.0)
         self.declare_parameter("camera_z_offset_m", 0.27)
+        self.declare_parameter("controller_cmd_topic", "")
+        self.declare_parameter("controller_pan_topic", "")
+        self.declare_parameter("controller_tilt_topic", "")
+        self.declare_parameter("controller_seed_x", -2.0)
+        self.declare_parameter("controller_seed_y", 0.0)
+        self.declare_parameter("controller_seed_yaw_deg", 0.0)
+        self.declare_parameter("controller_publish_gimbal", True)
+        self.declare_parameter("controller_profile_enable", True)
+        self.declare_parameter("controller_profile_smooth_alpha", 0.85)
+        self.declare_parameter("controller_profile_max_step_m_per_tick", 0.30)
+        self.declare_parameter("controller_profile_cmd_xy_deadband_m", 0.05)
+        self.declare_parameter("controller_profile_yaw_deadband_rad", 0.08)
+        self.declare_parameter("controller_profile_min_cmd_period_s", 0.12)
         self.declare_parameter("leader_input_type", "odom")
         self.declare_parameter("leader_odom_topic", "/a201_0000/platform/odom/filtered")
         self.declare_parameter("leader_pose_topic", "/coord/leader_estimate")
@@ -149,13 +164,36 @@ class FollowUav(Node):
         # ---------- Read params ----------
         self.world = str(self.get_parameter("world").value)
         self.uav_name = str(self.get_parameter("uav_name").value)
+        self.uav_backend = str(self.get_parameter("uav_backend").value).strip().lower()
         self.camera_name = str(self.get_parameter("camera_name").value)
         self.camera_pitch_deg = float(self.get_parameter("camera_pitch_deg").value)
         self.camera_z_offset_m = float(self.get_parameter("camera_z_offset_m").value)
+        self.controller_cmd_topic = str(self.get_parameter("controller_cmd_topic").value).strip()
+        self.controller_pan_topic = str(self.get_parameter("controller_pan_topic").value).strip()
+        self.controller_tilt_topic = str(self.get_parameter("controller_tilt_topic").value).strip()
+        self.controller_seed_x = float(self.get_parameter("controller_seed_x").value)
+        self.controller_seed_y = float(self.get_parameter("controller_seed_y").value)
+        self.controller_seed_yaw_deg = float(self.get_parameter("controller_seed_yaw_deg").value)
+        self.controller_publish_gimbal = bool(self.get_parameter("controller_publish_gimbal").value)
+        self.controller_profile_enable = bool(self.get_parameter("controller_profile_enable").value)
+        self.controller_profile_smooth_alpha = float(self.get_parameter("controller_profile_smooth_alpha").value)
+        self.controller_profile_max_step_m_per_tick = float(self.get_parameter("controller_profile_max_step_m_per_tick").value)
+        self.controller_profile_cmd_xy_deadband_m = float(self.get_parameter("controller_profile_cmd_xy_deadband_m").value)
+        self.controller_profile_yaw_deadband_rad = float(self.get_parameter("controller_profile_yaw_deadband_rad").value)
+        self.controller_profile_min_cmd_period_s = float(self.get_parameter("controller_profile_min_cmd_period_s").value)
         self.camera_model_name = f"{self.uav_name}_{self.camera_name}"
         self.leader_input_type = str(self.get_parameter("leader_input_type").value).strip().lower()
         self.leader_odom_topic = str(self.get_parameter("leader_odom_topic").value)
         self.leader_pose_topic = str(self.get_parameter("leader_pose_topic").value)
+
+        if self.uav_backend not in ("setpose", "controller"):
+            raise ValueError("uav_backend must be 'setpose' or 'controller'")
+        if not self.controller_cmd_topic:
+            self.controller_cmd_topic = f"/{self.uav_name}/psdk_ros2/flight_control_setpoint_ENUposition_yaw"
+        if not self.controller_pan_topic:
+            self.controller_pan_topic = f"/{self.uav_name}/update_pan"
+        if not self.controller_tilt_topic:
+            self.controller_tilt_topic = f"/{self.uav_name}/update_tilt"
 
         if self.leader_input_type == "estimate":
             self.leader_input_type = "pose"
@@ -261,6 +299,36 @@ class FollowUav(Node):
             raise ValueError("estimate_heading_min_speed_mps must be >= 0")
         if self.estimate_heading_max_dt_s <= 0.0:
             raise ValueError("estimate_heading_max_dt_s must be > 0")
+        if not (0.0 <= self.controller_profile_smooth_alpha <= 1.0):
+            raise ValueError("controller_profile_smooth_alpha must be in [0,1]")
+        if self.controller_profile_max_step_m_per_tick < 0.0:
+            raise ValueError("controller_profile_max_step_m_per_tick must be >= 0")
+        if self.controller_profile_cmd_xy_deadband_m < 0.0:
+            raise ValueError("controller_profile_cmd_xy_deadband_m must be >= 0")
+        if self.controller_profile_yaw_deadband_rad < 0.0:
+            raise ValueError("controller_profile_yaw_deadband_rad must be >= 0")
+        if self.controller_profile_min_cmd_period_s < 0.0:
+            raise ValueError("controller_profile_min_cmd_period_s must be >= 0")
+
+        # Apply conservative controller-backend tuning only when values still look like
+        # baseline defaults. Explicit user overrides remain untouched.
+        self.controller_profile_applied = []
+        if self.uav_backend == "controller" and self.controller_profile_enable:
+            if self.smooth_alpha >= 0.999 and self.controller_profile_smooth_alpha < self.smooth_alpha:
+                self.smooth_alpha = self.controller_profile_smooth_alpha
+                self.controller_profile_applied.append("smooth_alpha")
+            if self.max_step_m_per_tick >= 0.5 and self.controller_profile_max_step_m_per_tick < self.max_step_m_per_tick:
+                self.max_step_m_per_tick = self.controller_profile_max_step_m_per_tick
+                self.controller_profile_applied.append("max_step_m_per_tick")
+            if self.cmd_xy_deadband_m <= 1e-9 and self.controller_profile_cmd_xy_deadband_m > self.cmd_xy_deadband_m:
+                self.cmd_xy_deadband_m = self.controller_profile_cmd_xy_deadband_m
+                self.controller_profile_applied.append("cmd_xy_deadband_m")
+            if self.yaw_deadband_rad <= 0.050001 and self.controller_profile_yaw_deadband_rad > self.yaw_deadband_rad:
+                self.yaw_deadband_rad = self.controller_profile_yaw_deadband_rad
+                self.controller_profile_applied.append("yaw_deadband_rad")
+            if self.min_cmd_period_s <= 0.100001 and self.controller_profile_min_cmd_period_s > self.min_cmd_period_s:
+                self.min_cmd_period_s = self.controller_profile_min_cmd_period_s
+                self.controller_profile_applied.append("min_cmd_period_s")
 
         # ---------- State ----------
         self.have_ugv = False
@@ -271,6 +339,14 @@ class FollowUav(Node):
         # Commanded UAV pose (deterministic internal state)
         self.uav_cmd = Pose2D(0.0, 0.0, 0.0)
         self.have_uav_cmd = False
+        if self.uav_backend == "controller":
+            # Seed internal state to match simulator backend initial state.
+            self.uav_cmd = Pose2D(
+                self.controller_seed_x,
+                self.controller_seed_y,
+                math.radians(self.controller_seed_yaw_deg),
+            )
+            self.have_uav_cmd = True
 
         self.last_cmd_time: Optional[Time] = None
         self.pending_futures = []
@@ -327,6 +403,18 @@ class FollowUav(Node):
             f"/{self.uav_name}/pose_cmd/odom",
             10,
         )
+        self.controller_cmd_pub = None
+        self.controller_pan_pub = None
+        self.controller_tilt_pub = None
+        if self.uav_backend == "controller":
+            self.controller_cmd_pub = self.create_publisher(
+                Joy,
+                self.controller_cmd_topic,
+                10,
+            )
+            if self.controller_publish_gimbal:
+                self.controller_pan_pub = self.create_publisher(Float64, self.controller_pan_topic, 10)
+                self.controller_tilt_pub = self.create_publisher(Float64, self.controller_tilt_topic, 10)
 
         self.events_pub = self.create_publisher(String, self.event_topic, 10)
         # Metrics (for offline evaluation)
@@ -345,17 +433,19 @@ class FollowUav(Node):
             Float32, f"{self.metrics_prefix}/follow_tracking_error_cmd", 10
         )
 
-        srv_name = f"/world/{self.world}/set_pose"
-        self.cli = self.create_client(SetEntityPose, srv_name)
-        self.get_logger().info(f"[follow_uav] Waiting for service: {srv_name}")
-        while not self.cli.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("[follow_uav] Service not available, waiting again...")
+        self.cli = None
+        if self.uav_backend == "setpose":
+            srv_name = f"/world/{self.world}/set_pose"
+            self.cli = self.create_client(SetEntityPose, srv_name)
+            self.get_logger().info(f"[follow_uav] Waiting for service: {srv_name}")
+            while not self.cli.wait_for_service(timeout_sec=1.0):
+                self.get_logger().info("[follow_uav] Service not available, waiting again...")
 
         dt = 1.0 / self.tick_hz
         self.timer = self.create_timer(dt, self.on_tick)
 
         self.get_logger().info(
-            f"[follow_uav] Started: world={self.world}, uav={self.uav_name}, "
+            f"[follow_uav] Started: world={self.world}, uav={self.uav_name}, backend={self.uav_backend}, "
             f"camera_model={self.camera_model_name}, camera_pitch_deg={self.camera_pitch_deg}, "
             f"camera_z_offset_m={self.camera_z_offset_m}, "
             f"leader_input={leader_desc}, tick={self.tick_hz}Hz, "
@@ -376,9 +466,15 @@ class FollowUav(Node):
             f"estimate_heading_from_motion_enable={self.estimate_heading_from_motion_enable}, "
             f"estimate_heading_alpha={self.estimate_heading_alpha}, estimate_heading_min_speed_mps={self.estimate_heading_min_speed_mps}, "
             f"estimate_heading_max_dt_s={self.estimate_heading_max_dt_s}, "
+            f"controller_cmd_topic={self.controller_cmd_topic}, controller_pan_topic={self.controller_pan_topic}, "
+            f"controller_tilt_topic={self.controller_tilt_topic}, controller_seed=({self.controller_seed_x:.2f},{self.controller_seed_y:.2f},{self.controller_seed_yaw_deg:.1f}deg), "
+            f"controller_profile_applied={','.join(self.controller_profile_applied) if self.controller_profile_applied else 'none'}, "
             f"event_topic={self.event_topic}"
         )
         self.emit_event("FOLLOW_NODE_START")
+        self.emit_event(f"FOLLOW_BACKEND:{self.uav_backend}")
+        if self.controller_profile_applied:
+            self.emit_event(f"FOLLOW_CONTROLLER_PROFILE_APPLIED:{','.join(self.controller_profile_applied)}")
 
     def emit_event(self, s: str):
         if not self.publish_events:
@@ -746,10 +842,14 @@ class FollowUav(Node):
         return fut
 
     def set_entity_pose_async(self, entity_name: str, x: float, y: float, z: float, yaw_rad: float):
+        if self.cli is None:
+            return None
         quat = quat_from_yaw(float(yaw_rad))
         return self._set_entity_pose_quat_async(entity_name, x, y, z, quat, "uav")
 
     def set_camera_pose_async(self, x: float, y: float, z: float):
+        if self.cli is None:
+            return None
         quat = quat_from_camera_pitch_deg(self.camera_pitch_deg)
         return self._set_entity_pose_quat_async(
             self.camera_model_name,
@@ -765,6 +865,29 @@ class FollowUav(Node):
             return False
         self.pending_futures = [f for f in self.pending_futures if f is not None and not f.done()]
         return bool(self.pending_futures)
+
+    def send_controller_command(self, x: float, y: float, z: float, yaw_rad: float) -> None:
+        if self.controller_cmd_pub is None:
+            return
+
+        dx = 0.0
+        dy = 0.0
+        if self.have_uav_cmd:
+            dx = float(x - self.uav_cmd.x)
+            dy = float(y - self.uav_cmd.y)
+
+        cmd = Joy()
+        cmd.axes = [dx, dy, float(z), float(yaw_rad)]
+        self.controller_cmd_pub.publish(cmd)
+
+        if self.controller_publish_gimbal and self.controller_pan_pub is not None and self.controller_tilt_pub is not None:
+            pan_msg = Float64()
+            pan_msg.data = 0.0
+            self.controller_pan_pub.publish(pan_msg)
+
+            tilt_msg = Float64()
+            tilt_msg.data = float(self.camera_pitch_deg)
+            self.controller_tilt_pub.publish(tilt_msg)
 
     def publish_pose_cmd(self, x: float, y: float, z: float, yaw_rad: float):
         ps = PoseStamped()
@@ -831,8 +954,8 @@ class FollowUav(Node):
                 self.emit_event("POSE_STALE_HOLD_EXIT")
                 self.stale_latched = False
 
-        # Avoid backlog: if previous set_pose requests are still pending, skip this tick.
-        if self._has_pending_pose_requests():
+        # Avoid backlog only for set_pose backend requests.
+        if self.uav_backend == "setpose" and self._has_pending_pose_requests():
             return
 
         # Rate-limit commands independently of tick rate
@@ -931,11 +1054,15 @@ class FollowUav(Node):
                 xt = self.uav_cmd.x
                 yt = self.uav_cmd.y
 
-        # Command UAV model and its separately spawned gimbal/camera model.
-        self.pending_futures = [
-            self.set_entity_pose_async(self.uav_name, xt, yt, self.z_alt, yaw_cmd),
-            self.set_camera_pose_async(xt, yt, self.z_alt),
-        ]
+        if self.uav_backend == "setpose":
+            # Command UAV model and its separately spawned gimbal/camera model.
+            self.pending_futures = [
+                self.set_entity_pose_async(self.uav_name, xt, yt, self.z_alt, yaw_cmd),
+                self.set_camera_pose_async(xt, yt, self.z_alt),
+            ]
+        else:
+            self.pending_futures = []
+            self.send_controller_command(xt, yt, self.z_alt, yaw_cmd)
 
         # Publish commanded pose for rosbag/metrics
         self.publish_pose_cmd(xt, yt, self.z_alt, yaw_cmd)

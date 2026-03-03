@@ -77,6 +77,7 @@ UGV_CMD_TOPIC="$(normalize_topic "$(get_launch_assignment_value "ugv_cmd_topic" 
 
 LEADER_PERCEPTION_ENABLE="${LEADER_PERCEPTION_ENABLE:-false}"
 START_LEADER_ESTIMATOR="${START_LEADER_ESTIMATOR:-auto}"
+UAV_BACKEND="${UAV_BACKEND:-setpose}"
 YOLO_WEIGHTS="${YOLO_WEIGHTS:-}"
 YOLO_DEVICE="${YOLO_DEVICE:-cpu}"
 SHUTDOWN_WHEN_UGV_DONE="${SHUTDOWN_WHEN_UGV_DONE:-true}"
@@ -113,6 +114,18 @@ PREFLIGHT_LOG="$RUN_DIR/preflight.log"
 BAG_PID=""
 BAG_STOPPED=0
 SUMMARY_WRITTEN=0
+BAG_STOP_INT_TIMEOUT_S="${BAG_STOP_INT_TIMEOUT_S:-4}"
+BAG_STOP_TERM_TIMEOUT_S="${BAG_STOP_TERM_TIMEOUT_S:-3}"
+BAG_STOP_KILL_TIMEOUT_S="${BAG_STOP_KILL_TIMEOUT_S:-2}"
+
+UAV_BACKEND="$(get_launch_assignment_value "uav_backend" "$UAV_BACKEND")"
+case "$UAV_BACKEND" in
+  setpose|controller) ;;
+  *)
+    echo "[run_follow_with_bag] invalid uav_backend='$UAV_BACKEND' (expected setpose|controller)"
+    exit 9
+    ;;
+esac
 
 acquire_mode_lock() {
   if ! is_truthy "$MODE_LOCK_ENABLE"; then
@@ -152,16 +165,41 @@ release_mode_lock() {
   fi
 }
 
+wait_for_pid_exit() {
+  local pid="$1"
+  local timeout_s="$2"
+  local deadline=$((SECONDS + timeout_s))
+  while kill -0 "$pid" 2>/dev/null; do
+    if (( SECONDS >= deadline )); then
+      return 1
+    fi
+    sleep 0.2
+  done
+  return 0
+}
+
 stop_bag() {
   if [[ "$BAG_STOPPED" -eq 1 ]]; then
     return
   fi
   BAG_STOPPED=1
 
-  if [[ -n "$BAG_PID" ]] && kill -0 "$BAG_PID" 2>/dev/null; then
-    kill -INT "$BAG_PID" 2>/dev/null || true
-    wait "$BAG_PID" 2>/dev/null || true
+  if [[ -z "$BAG_PID" ]] || ! kill -0 "$BAG_PID" 2>/dev/null; then
+    return
   fi
+
+  kill -INT "$BAG_PID" 2>/dev/null || true
+  if ! wait_for_pid_exit "$BAG_PID" "$BAG_STOP_INT_TIMEOUT_S"; then
+    echo "[run_follow_with_bag] rosbag still running after SIGINT; escalating to SIGTERM"
+    kill -TERM "$BAG_PID" 2>/dev/null || true
+    if ! wait_for_pid_exit "$BAG_PID" "$BAG_STOP_TERM_TIMEOUT_S"; then
+      echo "[run_follow_with_bag] rosbag still running after SIGTERM; escalating to SIGKILL"
+      kill -KILL "$BAG_PID" 2>/dev/null || true
+      wait_for_pid_exit "$BAG_PID" "$BAG_STOP_KILL_TIMEOUT_S" || true
+    fi
+  fi
+
+  wait "$BAG_PID" 2>/dev/null || true
 }
 
 write_bag_summary() {
@@ -231,7 +269,7 @@ if is_truthy "$PREFLIGHT_ENABLE"; then
   PREFLIGHT_MODE_GUARD_ENABLE="$PREFLIGHT_MODE_GUARD_ENABLE" \
   PREFLIGHT_SET_POSE_TIMEOUT_S="$PREFLIGHT_SET_POSE_TIMEOUT_S" \
   PREFLIGHT_UAV_TOPICS_TIMEOUT_S="$PREFLIGHT_UAV_TOPICS_TIMEOUT_S" \
-  bash "$PREFLIGHT_SCRIPT" "$UGV_ODOM_TOPIC" "$PREFLIGHT_CONTROLLER_MANAGER" "$PREFLIGHT_CONTROLLER_NAME" "$WORLD" "$UAV_NAME" \
+  bash "$PREFLIGHT_SCRIPT" "$UGV_ODOM_TOPIC" "$PREFLIGHT_CONTROLLER_MANAGER" "$PREFLIGHT_CONTROLLER_NAME" "$WORLD" "$UAV_NAME" "$UAV_BACKEND" \
     > "$PREFLIGHT_LOG" 2>&1
   PREFLIGHT_RC=$?
   set -e
@@ -265,6 +303,10 @@ BAG_TOPICS=(
   "/${UGV_NAMESPACE}/tf"
   "/${UGV_NAMESPACE}/tf_static"
   "/${UAV_NAME}/pose_cmd"
+  "/${UAV_NAME}/pose"
+  "/${UAV_NAME}/psdk_ros2/flight_control_setpoint_ENUposition_yaw"
+  "/${UAV_NAME}/update_pan"
+  "/${UAV_NAME}/update_tilt"
   /coord/leader_estimate
   /coord/leader_estimate_status
 )
@@ -293,6 +335,7 @@ unset _bag_topics_unique
   echo "git_commit: \"$GIT_COMMIT\""
   echo "world: \"$WORLD\""
   echo "uav_name: \"$UAV_NAME\""
+  echo "uav_backend: \"$UAV_BACKEND\""
   echo "leader_mode: \"$LEADER_MODE\""
   echo "ugv_namespace: \"$UGV_NAMESPACE\""
   echo "ugv_cmd_topic: \"$UGV_CMD_TOPIC\""
@@ -349,6 +392,7 @@ LAUNCH_CMD=(
   "world:=${WORLD}"
   "uav_name:=${UAV_NAME}"
   "leader_mode:=${LEADER_MODE}"
+  "uav_backend:=${UAV_BACKEND}"
   "shutdown_when_ugv_done:=${SHUTDOWN_WHEN_UGV_DONE}"
 )
 if ! has_launch_assignment_key "leader_perception_enable"; then

@@ -28,6 +28,20 @@ leader_estimator:
 follow_uav:
   ros__parameters:
     use_sim_time: true
+    uav_backend: setpose
+    controller_cmd_topic: ""
+    controller_pan_topic: ""
+    controller_tilt_topic: ""
+    controller_seed_x: -2.0
+    controller_seed_y: 0.0
+    controller_seed_yaw_deg: 0.0
+    controller_publish_gimbal: true
+    controller_profile_enable: true
+    controller_profile_smooth_alpha: 0.85
+    controller_profile_max_step_m_per_tick: 0.30
+    controller_profile_cmd_xy_deadband_m: 0.05
+    controller_profile_yaw_deadband_rad: 0.08
+    controller_profile_min_cmd_period_s: 0.12
     leader_input_type: odom
     leader_pose_topic: /coord/leader_estimate
     tick_hz: 5.0

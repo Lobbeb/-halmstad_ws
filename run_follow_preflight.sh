@@ -78,6 +78,36 @@ wait_for_topic_prefix() {
   done
 }
 
+has_publishers() {
+  local topic="$1"
+  local out
+  out="$(ros2 topic info "$topic" 2>/dev/null || true)"
+  if [[ -z "$out" ]]; then
+    return 1
+  fi
+  local count
+  count="$(printf '%s\n' "$out" | awk -F: '/Publisher count/ {gsub(/ /,"",$2); print $2; exit}')"
+  [[ -n "$count" ]] && (( count > 0 ))
+}
+
+wait_for_topic() {
+  local topic="$1"
+  local timeout_s="$2"
+  local timeout_int
+  timeout_int="$(normalize_timeout_s "$timeout_s")"
+  local t0
+  t0="$(date +%s)"
+  while true; do
+    if ros2 topic list 2>/dev/null | grep -Fxq "$topic"; then
+      return 0
+    fi
+    if (( $(date +%s) - t0 >= timeout_int )); then
+      return 1
+    fi
+    sleep 1
+  done
+}
+
 check_mode_guard() {
   if ! is_truthy "$PREFLIGHT_MODE_GUARD_ENABLE"; then
     return 0
@@ -104,6 +134,7 @@ CONTROLLER_MANAGER="${2:-/a201_0000/controller_manager}"
 CONTROLLER_NAME="${3:-platform_velocity_controller}"
 WORLD="${4:-orchard}"
 UAV_NAME="${5:-dji0}"
+UAV_BACKEND="${6:-setpose}"
 
 PREFLIGHT_TIMEOUT_S="${PREFLIGHT_TIMEOUT_S:-15}"
 PREFLIGHT_ACTIVATE_CONTROLLER="${PREFLIGHT_ACTIVATE_CONTROLLER:-true}"
@@ -113,8 +144,18 @@ PREFLIGHT_REQUIRE_UAV_NAMESPACE_TOPICS="${PREFLIGHT_REQUIRE_UAV_NAMESPACE_TOPICS
 PREFLIGHT_MODE_GUARD_ENABLE="${PREFLIGHT_MODE_GUARD_ENABLE:-true}"
 PREFLIGHT_SET_POSE_TIMEOUT_S="${PREFLIGHT_SET_POSE_TIMEOUT_S:-$PREFLIGHT_TIMEOUT_S}"
 PREFLIGHT_UAV_TOPICS_TIMEOUT_S="${PREFLIGHT_UAV_TOPICS_TIMEOUT_S:-$PREFLIGHT_TIMEOUT_S}"
+PREFLIGHT_REQUIRE_UAV_CAMERA_TOPICS="${PREFLIGHT_REQUIRE_UAV_CAMERA_TOPICS:-true}"
+PREFLIGHT_FORBID_CONTROLLER_TOPIC_PUBLISHERS="${PREFLIGHT_FORBID_CONTROLLER_TOPIC_PUBLISHERS:-true}"
 STATE_DIR="${STATE_DIR:-/tmp/halmstad_ws}"
 MODE_FILE="$STATE_DIR/run_mode.lock"
+
+case "$UAV_BACKEND" in
+  setpose|controller) ;;
+  *)
+    echo "[run_follow_preflight] invalid backend '$UAV_BACKEND' (expected setpose|controller)"
+    exit 9
+    ;;
+esac
 
 set +u
 source /opt/ros/jazzy/setup.bash
@@ -128,6 +169,7 @@ set -u
 
 check_mode_guard
 
+echo "[run_follow_preflight] backend=$UAV_BACKEND"
 echo "[run_follow_preflight] controller_manager=$CONTROLLER_MANAGER"
 if ! timeout 8s ros2 control list_controllers -c "$CONTROLLER_MANAGER" >/dev/null 2>&1; then
   echo "[run_follow_preflight] controller manager unavailable: $CONTROLLER_MANAGER"
@@ -176,6 +218,29 @@ if is_truthy "$PREFLIGHT_REQUIRE_UAV_NAMESPACE_TOPICS"; then
     echo "[run_follow_preflight] no topics found for ${UAV_PREFIX} within ${PREFLIGHT_UAV_TOPICS_TIMEOUT_S}s"
     echo "[run_follow_preflight] this usually means UAV name mismatch or UAV spawn missing"
     exit 8
+  fi
+fi
+
+if is_truthy "$PREFLIGHT_REQUIRE_UAV_CAMERA_TOPICS"; then
+  CAMERA_TOPIC="/${UAV_NAME}/camera0/image_raw"
+  CAMERA_INFO_TOPIC="/${UAV_NAME}/camera0/camera_info"
+  echo "[run_follow_preflight] waiting for UAV camera topics: $CAMERA_TOPIC and $CAMERA_INFO_TOPIC"
+  if ! wait_for_topic "$CAMERA_TOPIC" "$PREFLIGHT_UAV_TOPICS_TIMEOUT_S"; then
+    echo "[run_follow_preflight] missing topic within ${PREFLIGHT_UAV_TOPICS_TIMEOUT_S}s: $CAMERA_TOPIC"
+    exit 10
+  fi
+  if ! wait_for_topic "$CAMERA_INFO_TOPIC" "$PREFLIGHT_UAV_TOPICS_TIMEOUT_S"; then
+    echo "[run_follow_preflight] missing topic within ${PREFLIGHT_UAV_TOPICS_TIMEOUT_S}s: $CAMERA_INFO_TOPIC"
+    exit 11
+  fi
+fi
+
+if [[ "$UAV_BACKEND" == "controller" ]] && is_truthy "$PREFLIGHT_FORBID_CONTROLLER_TOPIC_PUBLISHERS"; then
+  CTRL_TOPIC="/${UAV_NAME}/psdk_ros2/flight_control_setpoint_ENUposition_yaw"
+  if has_publishers "$CTRL_TOPIC"; then
+    echo "[run_follow_preflight] controller backend conflict: topic already has publishers: $CTRL_TOPIC"
+    echo "[run_follow_preflight] stop any external UAV controller before running follow controller backend"
+    exit 12
   fi
 fi
 
