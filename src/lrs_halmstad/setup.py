@@ -80,6 +80,8 @@ setup(
             "leader_estimator = lrs_halmstad.leader_estimator:main",
             "gazebo_pose_tcp_bridge = lrs_halmstad.gazebo_pose_tcp_bridge:main",
             "pose_cmd_to_odom = lrs_halmstad.pose_cmd_to_odom:main",
+            "controller = lrs_halmstad.controller:main",
+            "simulator = lrs_halmstad.simulator:main",
             "uav_setpose_sweep = lrs_halmstad.uav_setpose_sweep:main",
             "ugv_motion_driver = lrs_halmstad.ugv_motion_driver:main",
               # optional later:

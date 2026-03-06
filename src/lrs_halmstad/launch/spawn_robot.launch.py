@@ -54,6 +54,11 @@ def generate_launch_description():
         default_value="false",
         description='Bridge /<name>/<camera_name> image + camera_info topics to ROS'
     )
+    bridge_gimbal_arg = DeclareLaunchArgument(
+        name='bridge_gimbal',
+        default_value="true",
+        description='Bridge gimbal joint command topic(s) between ROS and Gazebo'
+    )
     camera_name_arg = DeclareLaunchArgument(name='camera_name', default_value="camera0",
                                             description='Attached camera name')
 
@@ -129,6 +134,27 @@ def generate_launch_description():
         ])),
     )
 
+    gimbal_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            ['/model/', LaunchConfiguration('name'),
+             '/joint/', LaunchConfiguration('name'),
+             '_gimbal_joint/pitch/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double'],
+            ['/model/', LaunchConfiguration('name'),
+             '/joint/', LaunchConfiguration('name'),
+             '_gimbal_joint/yaw/cmd_pos@std_msgs/msg/Float64@ignition.msgs.Double'],
+        ],
+        output='screen',
+        condition=IfCondition(PythonExpression([
+            "'",
+            LaunchConfiguration('bridge_gimbal'),
+            "'.lower() in ('1','true','yes','on') and '",
+            with_camera_for_mode,
+            "' == 'true'"
+        ])),
+    )
+
     return LaunchDescription([
         DeclareLaunchArgument('x', default_value="0.0"),
         DeclareLaunchArgument('y', default_value="0.0"),
@@ -141,10 +167,12 @@ def generate_launch_description():
         uav_mode_arg,
         with_camera_arg,
         bridge_camera_arg,
+        bridge_gimbal_arg,
         camera_name_arg,
         model_arg,
         world_arg,        
         name_arg,
         spawn_node,
-        camera_bridge
+        camera_bridge,
+        gimbal_bridge,
     ])
