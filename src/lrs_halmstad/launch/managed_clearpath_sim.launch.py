@@ -7,6 +7,7 @@ from launch.actions import OpaqueFunction, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
+from ros_gz_bridge.actions import RosGzBridge
 
 
 def _gazebo_world_name(world_sub):
@@ -188,12 +189,33 @@ def generate_launch_description():
         value=LaunchConfiguration('yaw'),
     )
 
-    clock_bridge = Node(
-        package='ros_gz_bridge',
-        executable='parameter_bridge',
-        name='clock_bridge',
+    clock_bridge = RosGzBridge(
+        bridge_name='clock_bridge',
+        use_composition=False,
+        extra_bridge_params={
+            'bridges': {
+                'bridge_0': {
+                    'ros_topic_name': '/clock_raw',
+                    'ros_type_name': 'rosgraph_msgs/msg/Clock',
+                    'gz_topic_name': '/clock',
+                    'gz_type_name': 'gz.msgs.Clock',
+                    'direction': 'GZ_TO_ROS',
+                    'lazy': False,
+                },
+            },
+            'bridge_names': ['bridge_0'],
+        },
+    )
+
+    clock_guard = Node(
+        package='lrs_halmstad',
+        executable='clock_guard',
+        name='clock_guard',
         output='screen',
-        arguments=['/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'],
+        parameters=[{
+            'input_topic': '/clock_raw',
+            'output_topic': '/clock',
+        }],
     )
 
     robot_spawn = IncludeLaunchDescription(
@@ -220,5 +242,6 @@ def generate_launch_description():
     ld.add_action(ugv_spawn_yaw)
     ld.add_action(OpaqueFunction(function=_gz_launch))
     ld.add_action(clock_bridge)
+    ld.add_action(clock_guard)
     ld.add_action(robot_spawn)
     return ld
