@@ -19,6 +19,7 @@ from lrs_halmstad.follow_math import (
     clamp_mag,
     clamp_point_to_radius,
     coerce_bool,
+    compute_leader_look_target,
     quat_from_yaw,
     solve_yaw_to_target,
     wrap_pi,
@@ -38,6 +39,8 @@ class FollowUav(Node):
         self.declare_parameter("uav_name", "dji0")
         self.declare_parameter("leader_input_type", "pose")
         self.declare_parameter("leader_pose_topic", "/coord/leader_estimate")
+        self.declare_parameter("leader_actual_heading_enable", True)
+        self.declare_parameter("leader_actual_heading_topic", "/a201_0000/amcl_pose_odom")
 
         self.declare_parameter("tick_hz", 10.0)
         self.declare_parameter("d_target", 7.0, dyn_num)
@@ -52,7 +55,7 @@ class FollowUav(Node):
         self.declare_parameter("uav_start_y", 0.0)
         self.declare_parameter("uav_start_yaw_deg", 0.0)
 
-        self.declare_parameter("follow_yaw", False)
+        self.declare_parameter("follow_yaw", True)
 
         # Freshness and service pacing
         self.declare_parameter("pose_timeout_s", 0.75)   # stale if odom older than this
@@ -61,10 +64,19 @@ class FollowUav(Node):
         # Smoothing (alpha=1.0 -> no smoothing; 0.0 -> freeze)
         self.declare_parameter("smooth_alpha", 1.0)
         self.declare_parameter("follow_speed_mps", 0.5)
+        self.declare_parameter("follow_speed_gain", 2.0)
+        self.declare_parameter("follow_z_speed_mps", 1.0)
+        self.declare_parameter("follow_z_speed_gain", 2.0)
         self.declare_parameter("cmd_xy_deadband_m", 0.0)
-        self.declare_parameter("follow_yaw_gain", 1.0)
+        self.declare_parameter("follow_yaw_rate_rad_s", 1.0)
+        self.declare_parameter("follow_yaw_rate_gain", 2.0)
         self.declare_parameter("yaw_deadband_rad", 0.0)
         self.declare_parameter("yaw_update_xy_gate_m", 0.0)
+        self.declare_parameter("camera_x_offset_m", 0.0)
+        self.declare_parameter("camera_y_offset_m", 0.0)
+        self.declare_parameter("camera_z_offset_m", 0.27)
+        self.declare_parameter("leader_look_target_x_m", 0.0)
+        self.declare_parameter("leader_look_target_y_m", 0.0)
         self.declare_parameter("leader_status_topic", "/coord/leader_estimate_status")
         self.declare_parameter("quality_scale_enable", True)
         self.declare_parameter("quality_status_timeout_s", 1.5)
@@ -85,7 +97,10 @@ class FollowUav(Node):
         self.declare_parameter("traj_max_accel_mps2", 3.0)
         self.declare_parameter("traj_quality_min_scale", 0.35)
         self.declare_parameter("traj_reset_on_yaw_jump_rad", 0.7)
-        self.declare_parameter("estimate_heading_from_motion_enable", True)
+        # Estimate-mode already receives a tracker-stabilized pose yaw from
+        # leader_estimator. Re-deriving heading again here adds noise to the
+        # anchor frame, so keep this opt-in.
+        self.declare_parameter("estimate_heading_from_motion_enable", False)
         self.declare_parameter("estimate_heading_alpha", 0.35)
         self.declare_parameter("estimate_heading_min_speed_mps", 0.15)
         self.declare_parameter("estimate_heading_max_dt_s", 1.0)
@@ -96,6 +111,12 @@ class FollowUav(Node):
         leader_input_type_raw = str(self.get_parameter("leader_input_type").value).strip().lower()
         self.leader_input_type = leader_input_type_raw
         self.leader_pose_topic = str(self.get_parameter("leader_pose_topic").value)
+        self.leader_actual_heading_enable = coerce_bool(
+            self.get_parameter("leader_actual_heading_enable").value
+        )
+        self.leader_actual_heading_topic = str(
+            self.get_parameter("leader_actual_heading_topic").value
+        )
 
         if self.leader_input_type == "estimate":
             self.leader_input_type = "pose"
@@ -121,31 +142,24 @@ class FollowUav(Node):
 
         self.follow_yaw = coerce_bool(self.get_parameter("follow_yaw").value)
 
-        # Detached camera pitch should track the chosen follow geometry. These
-        # offsets mirror the simulator camera mount so the same z_alt/d_target
-        # pair keeps the target framed consistently.
-        self.camera_x_offset_m = 0.40
-        self.camera_z_offset_m = 0.27
-        self.camera_look_target_z_m = 0.0
-        self.current_leader_distance_xy_m = max(0.01, self.d_target - self.camera_x_offset_m)
-        self.current_leader_distance_3d_m = math.hypot(
-            self.current_leader_distance_xy_m,
-            max(0.0, self.z_alt - self.camera_z_offset_m - self.camera_look_target_z_m),
-        )
-        self.ugv_z = 0.0
-        self.uav_actual_z = self.z_alt
-        self.uav_cmd_z = self.z_alt
-
         self.pose_timeout_s = float(self.get_parameter("pose_timeout_s").value)
         self.min_cmd_period_s = float(self.get_parameter("min_cmd_period_s").value)
         self.smooth_alpha = float(self.get_parameter("smooth_alpha").value)
         self.follow_speed_mps = float(self.get_parameter("follow_speed_mps").value)
+        self.follow_speed_gain = float(self.get_parameter("follow_speed_gain").value)
+        self.follow_z_speed_mps = float(self.get_parameter("follow_z_speed_mps").value)
+        self.follow_z_speed_gain = float(self.get_parameter("follow_z_speed_gain").value)
         self.cmd_xy_deadband_m = float(self.get_parameter("cmd_xy_deadband_m").value)
-        self.follow_yaw_gain = float(self.get_parameter("follow_yaw_gain").value)
+        self.follow_yaw_rate_rad_s = float(self.get_parameter("follow_yaw_rate_rad_s").value)
+        self.follow_yaw_rate_gain = float(self.get_parameter("follow_yaw_rate_gain").value)
         self.yaw_deadband_rad = float(self.get_parameter("yaw_deadband_rad").value)
         self.yaw_update_xy_gate_m = float(self.get_parameter("yaw_update_xy_gate_m").value)
+        self.camera_x_offset_m = float(self.get_parameter("camera_x_offset_m").value)
+        self.camera_y_offset_m = float(self.get_parameter("camera_y_offset_m").value)
+        self.camera_z_offset_m = float(self.get_parameter("camera_z_offset_m").value)
+        self.leader_look_target_x_m = float(self.get_parameter("leader_look_target_x_m").value)
+        self.leader_look_target_y_m = float(self.get_parameter("leader_look_target_y_m").value)
         self.base_follow_speed_mps = self.follow_speed_mps
-        self.base_follow_yaw_gain = self.follow_yaw_gain
         self.leader_status_topic = str(self.get_parameter("leader_status_topic").value)
         self.quality_scale_enable = coerce_bool(self.get_parameter("quality_scale_enable").value)
         self.quality_status_timeout_s = float(self.get_parameter("quality_status_timeout_s").value)
@@ -170,6 +184,18 @@ class FollowUav(Node):
         self.estimate_heading_alpha = float(self.get_parameter("estimate_heading_alpha").value)
         self.estimate_heading_min_speed_mps = float(self.get_parameter("estimate_heading_min_speed_mps").value)
         self.estimate_heading_max_dt_s = float(self.get_parameter("estimate_heading_max_dt_s").value)
+        self.camera_look_target_z_m = 0.0
+        self.current_leader_distance_xy_m = max(
+            0.01,
+            math.hypot(self.d_target - self.camera_x_offset_m, self.camera_y_offset_m),
+        )
+        self.current_leader_distance_3d_m = math.hypot(
+            self.current_leader_distance_xy_m,
+            max(0.0, self.z_alt - self.camera_z_offset_m - self.camera_look_target_z_m),
+        )
+        self.ugv_z = 0.0
+        self.uav_actual_z = self.z_alt
+        self.uav_cmd_z = self.z_alt
         if self.tick_hz <= 0.0:
             raise ValueError("tick_hz must be > 0")
         if self.d_max <= 0.0 or self.d_target <= 0.0:
@@ -190,10 +216,18 @@ class FollowUav(Node):
             raise ValueError("smooth_alpha must be in [0,1]")
         if self.follow_speed_mps < 0.0:
             raise ValueError("follow_speed_mps must be >= 0")
+        if self.follow_speed_gain < 0.0:
+            raise ValueError("follow_speed_gain must be >= 0")
+        if self.follow_z_speed_mps < 0.0:
+            raise ValueError("follow_z_speed_mps must be >= 0")
+        if self.follow_z_speed_gain < 0.0:
+            raise ValueError("follow_z_speed_gain must be >= 0")
         if self.cmd_xy_deadband_m < 0.0:
             raise ValueError("cmd_xy_deadband_m must be >= 0")
-        if self.follow_yaw_gain < 0.0:
-            raise ValueError("follow_yaw_gain must be >= 0")
+        if self.follow_yaw_rate_rad_s < 0.0:
+            raise ValueError("follow_yaw_rate_rad_s must be >= 0")
+        if self.follow_yaw_rate_gain < 0.0:
+            raise ValueError("follow_yaw_rate_gain must be >= 0")
         if self.yaw_deadband_rad < 0.0:
             raise ValueError("yaw_deadband_rad must be >= 0")
         if self.yaw_update_xy_gate_m < 0.0:
@@ -238,12 +272,16 @@ class FollowUav(Node):
         self.have_seen_ugv_pose = False
         self.ugv_pose = Pose2D(0.0, 0.0, 0.0)
         self.last_ugv_stamp: Optional[Time] = None
+        self.last_actual_heading_yaw: Optional[float] = None
+        self.last_actual_heading_stamp: Optional[Time] = None
 
         # Commanded UAV pose (deterministic internal state)
         self.uav_cmd = Pose2D(self.uav_start_x, self.uav_start_y, self.uav_start_yaw)
         self.have_uav_cmd = bool(self.seed_uav_cmd_on_start)
         self.uav_actual = Pose2D(self.uav_start_x, self.uav_start_y, self.uav_start_yaw)
         self.have_uav_actual = False
+        self.last_uav_actual_time: Optional[Time] = None
+        self.last_debug_actual_yaw_unwrapped: Optional[float] = None
 
         self.last_cmd_time: Optional[Time] = None
         self.last_leader_status_fields = {}
@@ -271,6 +309,15 @@ class FollowUav(Node):
             10,
         )
         leader_desc = f"pose:{self.leader_pose_topic}"
+        self.leader_actual_heading_sub = None
+        if self.leader_actual_heading_enable:
+            self.leader_actual_heading_sub = self.create_subscription(
+                Odometry,
+                self.leader_actual_heading_topic,
+                self.on_leader_actual_heading_odom,
+                10,
+            )
+            leader_desc += f", actual_heading:{self.leader_actual_heading_topic}"
         self.leader_status_sub = self.create_subscription(
             String,
             self.leader_status_topic,
@@ -312,11 +359,17 @@ class FollowUav(Node):
             f"manual_override_enable={self.manual_override_enable}, "
             f"pose_timeout_s={self.pose_timeout_s}, min_cmd_period_s={self.min_cmd_period_s}, "
             f"smooth_alpha={self.smooth_alpha}, follow_speed_mps={self.follow_speed_mps}, "
+            f"follow_speed_gain={self.follow_speed_gain}, "
+            f"follow_z_speed_mps={self.follow_z_speed_mps}, "
+            f"follow_z_speed_gain={self.follow_z_speed_gain}, "
             f"seed_uav_cmd_on_start={self.seed_uav_cmd_on_start}, "
             f"startup_reposition_enable={self.startup_reposition_enable}, "
             f"uav_start=({self.uav_start_x:.2f},{self.uav_start_y:.2f},{math.degrees(self.uav_start_yaw):.1f}deg), "
-            f"cmd_xy_deadband_m={self.cmd_xy_deadband_m}, follow_yaw_gain={self.follow_yaw_gain}, "
+            f"cmd_xy_deadband_m={self.cmd_xy_deadband_m}, follow_yaw_rate_rad_s={self.follow_yaw_rate_rad_s}, "
+            f"follow_yaw_rate_gain={self.follow_yaw_rate_gain}, "
             f"yaw_deadband_rad={self.yaw_deadband_rad}, yaw_update_xy_gate_m={self.yaw_update_xy_gate_m}, "
+            f"camera_offset_m=({self.camera_x_offset_m}, {self.camera_y_offset_m}, {self.camera_z_offset_m}), "
+            f"leader_look_target_xy_m=({self.leader_look_target_x_m}, {self.leader_look_target_y_m}), "
             f"quality_scale_enable={self.quality_scale_enable}, leader_status_topic={self.leader_status_topic}, "
             f"quality_status_timeout_s={self.quality_status_timeout_s}, quality_conf=[{self.quality_conf_min},{self.quality_conf_good}], "
             f"quality_latency_ref_ms={self.quality_latency_ref_ms}, quality_min_step_scale={self.quality_min_step_scale}, "
@@ -327,6 +380,8 @@ class FollowUav(Node):
             f"traj_max_speed_mps={self.traj_max_speed_mps}, traj_max_accel_mps2={self.traj_max_accel_mps2}, "
             f"traj_quality_min_scale={self.traj_quality_min_scale}, traj_reset_on_yaw_jump_rad={self.traj_reset_on_yaw_jump_rad}, "
             f"estimate_heading_from_motion_enable={self.estimate_heading_from_motion_enable}, "
+            f"leader_actual_heading_enable={self.leader_actual_heading_enable}, "
+            f"leader_actual_heading_topic={self.leader_actual_heading_topic}, "
             f"estimate_heading_alpha={self.estimate_heading_alpha}, estimate_heading_min_speed_mps={self.estimate_heading_min_speed_mps}, "
             f"estimate_heading_max_dt_s={self.estimate_heading_max_dt_s}, "
             f"uav_cmd_topic=/{self.uav_name}/psdk_ros2/flight_control_setpoint_ENUposition_yaw"
@@ -568,12 +623,18 @@ class FollowUav(Node):
         self.leader_motion_prev_stamp = stamp
 
     def _leader_pose_for_follow(self) -> Pose2D:
-        if not self.estimate_heading_from_motion_enable:
-            return self.ugv_pose
-        yaw = self.ugv_pose.yaw
-        if self.leader_motion_heading_yaw is not None:
-            yaw = self.leader_motion_heading_yaw
+        yaw, _source, _estimate_yaw, _actual_yaw = self._leader_heading_details_for_follow()
         return Pose2D(self.ugv_pose.x, self.ugv_pose.y, yaw)
+
+    def _leader_heading_details_for_follow(self) -> Tuple[float, str, Optional[float], Optional[float]]:
+        estimate_yaw = self.ugv_pose.yaw
+        actual_yaw = None
+        if self.leader_actual_heading_enable and self.leader_actual_heading_is_fresh():
+            actual_yaw = self.last_actual_heading_yaw
+            return actual_yaw, "actual_heading", estimate_yaw, actual_yaw
+        if self.estimate_heading_from_motion_enable and self.leader_motion_heading_yaw is not None:
+            return self.leader_motion_heading_yaw, "motion_heading", estimate_yaw, actual_yaw
+        return estimate_yaw, "estimate_pose_yaw", estimate_yaw, actual_yaw
 
     def _shape_target_trajectory(self, leader: Pose2D, xt: float, yt: float, now: Time, quality_scale: float) -> Tuple[float, float]:
         if not self.traj_enable or self.leader_input_type != "pose":
@@ -666,6 +727,16 @@ class FollowUav(Node):
             self.last_ugv_stamp = self.get_clock().now()
         self._update_leader_motion_model(self.ugv_pose, self.last_ugv_stamp)
 
+    def on_leader_actual_heading_odom(self, msg: Odometry):
+        q = msg.pose.pose.orientation
+        self.last_actual_heading_yaw = yaw_from_quat(
+            float(q.x), float(q.y), float(q.z), float(q.w)
+        )
+        try:
+            self.last_actual_heading_stamp = Time.from_msg(msg.header.stamp)
+        except Exception:
+            self.last_actual_heading_stamp = self.get_clock().now()
+
     def on_uav_pose(self, msg: PoseStamped):
         p = msg.pose.position
         q = msg.pose.orientation
@@ -673,6 +744,10 @@ class FollowUav(Node):
         self.uav_actual = Pose2D(float(p.x), float(p.y), float(yaw))
         self.uav_actual_z = float(p.z)
         self.have_uav_actual = True
+        try:
+            self.last_uav_actual_time = Time.from_msg(msg.header.stamp)
+        except Exception:
+            self.last_uav_actual_time = self.get_clock().now()
 
     def _current_uav_pose(self) -> Pose2D:
         if self.have_uav_actual:
@@ -688,10 +763,36 @@ class FollowUav(Node):
             return self.uav_cmd_z
         return self.z_alt
 
+    def _use_cmd_state_for_control(self) -> bool:
+        if not self.have_uav_cmd:
+            return False
+        if not self.have_uav_actual or self.last_uav_actual_time is None:
+            return True
+        if self.last_cmd_time is None:
+            return False
+        return self.last_cmd_time.nanoseconds > self.last_uav_actual_time.nanoseconds
+
+    def _control_uav_pose(self) -> Pose2D:
+        if self._use_cmd_state_for_control():
+            return self.uav_cmd
+        return self._current_uav_pose()
+
+    def _control_uav_z(self) -> float:
+        if self._use_cmd_state_for_control():
+            return self.uav_cmd_z
+        return self._current_uav_z()
+
     def ugv_pose_is_fresh(self, now: Time) -> bool:
         if not self.have_ugv or self.last_ugv_stamp is None:
             return False
         age = (now - self.last_ugv_stamp).nanoseconds * 1e-9
+        return age <= self.pose_timeout_s
+
+    def leader_actual_heading_is_fresh(self) -> bool:
+        if self.last_actual_heading_yaw is None or self.last_actual_heading_stamp is None:
+            return False
+        now = self.get_clock().now()
+        age = (now - self.last_actual_heading_stamp).nanoseconds * 1e-9
         return age <= self.pose_timeout_s
 
     def can_send_command_now(self, now: Time) -> bool:
@@ -747,7 +848,7 @@ class FollowUav(Node):
             y,
             yaw,
             self.camera_x_offset_m,
-            0.0,
+            self.camera_y_offset_m,
         )
 
     def _solve_yaw_to_target(self, uav_x: float, uav_y: float, target_x: float, target_y: float) -> float:
@@ -757,8 +858,20 @@ class FollowUav(Node):
             target_x,
             target_y,
             self.camera_x_offset_m,
+            self.camera_y_offset_m,
+        )
+
+    def _leader_look_target_xy(self, leader_for_follow: Pose2D) -> Tuple[float, float]:
+        target_x, target_y, _target_z = compute_leader_look_target(
+            leader_for_follow.x,
+            leader_for_follow.y,
+            leader_for_follow.yaw,
+            self.ugv_z,
+            self.leader_look_target_x_m,
+            self.leader_look_target_y_m,
             0.0,
         )
+        return target_x, target_y
 
     def _anchor_errors(
         self, leader_for_follow: Pose2D, anchor_target: Pose2D, current_uav: Pose2D
@@ -777,25 +890,41 @@ class FollowUav(Node):
         )
         return anchor_distance_error, anchor_along_error, anchor_cross_error
 
-    def _effective_follow_yaw_gain(self, anchor_cross_error: float, yaw_error: float) -> float:
-        gain = self.follow_yaw_gain
-        cross_ref = max(0.25, 0.10 * max(self.d_target, 0.01))
-        horizontal_ref = max(self.current_leader_distance_xy_m, 0.50)
-        yaw_ref = max(0.05, math.atan2(cross_ref, horizontal_ref))
-        boost_cross = max(1.0, abs(anchor_cross_error) / cross_ref)
-        boost_yaw = max(1.0, abs(yaw_error) / yaw_ref)
-        return gain * min(4.0, max(boost_cross, boost_yaw))
+    @staticmethod
+    def _unwrap_angle_near(raw_angle: float, reference_angle: Optional[float]) -> float:
+        if reference_angle is None:
+            return float(raw_angle)
+        return float(reference_angle + wrap_pi(raw_angle - reference_angle))
 
-    def _publish_follow_debug(self, anchor_target: Pose2D) -> None:
+    def _publish_follow_debug(
+        self,
+        anchor_target: Pose2D,
+        *,
+        current_uav: Pose2D,
+        target_yaw: float,
+        yaw_error: float,
+        yaw_error_raw: float,
+        yaw_target_unwrapped: float,
+        yaw_actual_unwrapped: float,
+        yaw_wrap_correction: float,
+        yaw_step_limit: float,
+        yaw_cmd_delta: float,
+        yaw_mode: str,
+    ) -> None:
         now_msg = self.get_clock().now().to_msg()
-        current_uav = self._current_uav_pose()
-        leader_for_follow = self._leader_pose_for_follow() if self.have_ugv else Pose2D(
-            self.uav_start_x + self.d_target, self.uav_start_y, current_uav.yaw
-        )
-        target_yaw = self._solve_yaw_to_target(
-            current_uav.x, current_uav.y, leader_for_follow.x, leader_for_follow.y
-        )
-        yaw_error = wrap_pi(target_yaw - current_uav.yaw)
+        if self.have_ugv:
+            leader_follow_yaw, leader_heading_source, leader_estimate_yaw, leader_actual_heading_yaw = (
+                self._leader_heading_details_for_follow()
+            )
+            leader_for_follow = Pose2D(self.ugv_pose.x, self.ugv_pose.y, leader_follow_yaw)
+        else:
+            leader_heading_source = "startup_seed"
+            leader_follow_yaw = current_uav.yaw
+            leader_estimate_yaw = None
+            leader_actual_heading_yaw = None
+            leader_for_follow = Pose2D(
+                self.uav_start_x + self.d_target, self.uav_start_y, current_uav.yaw
+            )
         anchor_distance_error, anchor_along_error, anchor_cross_error = self._anchor_errors(
             leader_for_follow, anchor_target, current_uav
         )
@@ -815,12 +944,45 @@ class FollowUav(Node):
             anchor_along_error=anchor_along_error,
             anchor_cross_error=anchor_cross_error,
             yaw_error=yaw_error,
+            yaw_target_raw=target_yaw,
+            yaw_target_unwrapped=yaw_target_unwrapped,
+            yaw_actual_unwrapped=yaw_actual_unwrapped,
+            yaw_error_raw=yaw_error_raw,
+            yaw_wrap_correction=yaw_wrap_correction,
+            yaw_wrap_active=1.0 if abs(yaw_wrap_correction) > 1e-3 else 0.0,
+            yaw_step_limit=yaw_step_limit,
+            yaw_cmd_delta=yaw_cmd_delta,
+            yaw_mode=yaw_mode,
+            leader_heading_source=leader_heading_source,
+            leader_follow_yaw=leader_follow_yaw,
+            leader_estimate_yaw=leader_estimate_yaw,
+            leader_actual_heading_yaw=leader_actual_heading_yaw,
         )
 
-    def _effective_follow_speed_mps(self) -> float:
-        return self.base_follow_speed_mps
+    def _effective_follow_speed_mps(self, anchor_distance_error: float) -> float:
+        return min(
+            self.follow_speed_mps,
+            self.follow_speed_gain * max(anchor_distance_error, 0.0),
+        )
 
-    def _current_follow_geometry(self) -> Tuple[float, float, float]:
+    def _compute_command_z(self, current_z: float) -> float:
+        if self.tick_hz <= 0.0:
+            return float(self.z_alt)
+        z_error = float(self.z_alt) - float(current_z)
+        if abs(z_error) <= 0.01:
+            return float(self.z_alt)
+        z_speed_mps = min(
+            max(self.follow_z_speed_mps, 0.0),
+            max(self.follow_z_speed_gain, 0.0) * abs(z_error),
+        )
+        if z_speed_mps <= 0.0:
+            return float(current_z)
+        step_limit = z_speed_mps / self.tick_hz
+        if abs(z_error) <= step_limit:
+            return float(self.z_alt)
+        return float(current_z) + math.copysign(step_limit, z_error)
+
+    def _current_follow_geometry(self) -> Tuple[float, float]:
         if self.have_ugv:
             leader_x = self.ugv_pose.x
             leader_y = self.ugv_pose.y
@@ -838,13 +1000,15 @@ class FollowUav(Node):
 
         horizontal_distance = math.hypot(leader_x - camera_x, leader_y - camera_y)
         if horizontal_distance < 1e-3:
-            horizontal_distance = max(0.01, self.d_target - self.camera_x_offset_m)
-        vertical_drop = max(0.0, self.z_alt - self.camera_z_offset_m - self.camera_look_target_z_m)
+            horizontal_distance = max(
+                0.01,
+                math.hypot(self.d_target - self.camera_x_offset_m, self.camera_y_offset_m),
+            )
         distance_3d = math.hypot(horizontal_distance, uav_z - leader_z)
 
         self.current_leader_distance_xy_m = horizontal_distance
         self.current_leader_distance_3d_m = distance_3d
-        return horizontal_distance, vertical_drop, distance_3d
+        return horizontal_distance, distance_3d
 
     def _compute_anchor_target(self) -> Pose2D:
         leader_for_follow = self._leader_pose_for_follow()
@@ -854,9 +1018,10 @@ class FollowUav(Node):
         xt, yt = clamp_point_to_radius(leader_for_follow.x, leader_for_follow.y, xt, yt, self.d_max)
 
         if self.follow_yaw:
-            yaw_cmd = leader_for_follow.yaw
+            target_x, target_y = self._leader_look_target_xy(leader_for_follow)
+            yaw_cmd = self._solve_yaw_to_target(xt, yt, target_x, target_y)
         else:
-            yaw_cmd = self.uav_cmd.yaw if self.have_uav_cmd else leader_for_follow.yaw
+            yaw_cmd = self._current_uav_pose().yaw
 
         return Pose2D(xt, yt, yaw_cmd)
 
@@ -885,7 +1050,8 @@ class FollowUav(Node):
         if self.manual_override_enable:
             self._set_follow_state("MANUAL")
             return
-        current_uav = self._current_uav_pose()
+        current_uav = self._control_uav_pose()
+        current_uav_z = self._control_uav_z()
 
         if not self.ugv_pose_is_fresh(now):
             if self.can_send_command_now(now) and self._maybe_publish_startup_reposition(now):
@@ -893,119 +1059,99 @@ class FollowUav(Node):
             self._update_follow_state("HOLD")
             return
 
-        # Rate-limit commands independently of tick rate
         if not self.can_send_command_now(now):
             return
 
-        ugv = self.ugv_pose
         leader_for_follow = self._leader_pose_for_follow()
-        quality_scale, _quality_tag = self._quality_scale_from_status(now)
-        freeze_yaw_for_status = self._freeze_yaw_for_status()
-        desired_follow_state = self._classify_follow_state(quality_scale)
-        self._update_follow_state(desired_follow_state)
-
-        # Desired target behind UGV.
+        self._set_follow_state("TRACK")
         anchor_target = self._compute_anchor_target()
         xt = anchor_target.x
         yt = anchor_target.y
 
-        # Optional smoothing on commanded XY (helps jitter; default alpha=1.0 => no smoothing)
         if (self.have_uav_actual or self.have_uav_cmd) and self.smooth_alpha < 1.0:
             a = self.smooth_alpha
             xt = a * xt + (1.0 - a) * current_uav.x
             yt = a * yt + (1.0 - a) * current_uav.y
 
-        # Phase 2: relative-frame trajectory shaping (vel/accel limited), preserving the
-        # same leash target geometry while smoothing how we move the command toward it.
-        xt, yt = self._shape_target_trajectory(leader_for_follow, xt, yt, now, quality_scale)
-
-        # Confidence/latency-aware command shaping for estimate-mode: preserve follow+leash
-        # semantics while reducing aggression on noisy/intermittent perception.
-        effective_follow_speed_mps = self._effective_follow_speed_mps()
-        if self.follow_yaw:
-            yaw_cmd = self._solve_yaw_to_target(
-                current_uav.x, current_uav.y, leader_for_follow.x, leader_for_follow.y
-            )
-        else:
-            yaw_cmd = current_uav.yaw
-        _, _, anchor_cross_error = self._anchor_errors(leader_for_follow, anchor_target, current_uav)
-        yaw_error = wrap_pi(yaw_cmd - current_uav.yaw)
-        effective_follow_yaw_gain = self._effective_follow_yaw_gain(anchor_cross_error, yaw_error)
-        self._publish_follow_debug(anchor_target)
-        eff_step_limit = 0.0
-        if effective_follow_speed_mps > 0.0:
-            eff_step_limit = effective_follow_speed_mps / self.tick_hz
-        eff_yaw_step_limit = 0.0
-        _, _, current_distance_3d = self._current_follow_geometry()
-        if effective_follow_yaw_gain > 0.0 and effective_follow_speed_mps > 0.0:
-            yaw_rate_rad_s = effective_follow_yaw_gain * effective_follow_speed_mps / max(current_distance_3d, 0.01)
-            eff_yaw_step_limit = yaw_rate_rad_s / self.tick_hz
-        eff_deadband = self.cmd_xy_deadband_m
-        if self.quality_scale_enable:
-            if eff_step_limit > 0.0:
-                eff_step_limit *= quality_scale
-            if eff_yaw_step_limit > 0.0:
-                eff_yaw_step_limit *= quality_scale
-            eff_deadband += (1.0 - quality_scale) * self.quality_deadband_boost_m
-
-            quality_hold = (self.have_uav_actual or self.have_uav_cmd) and quality_scale <= self.quality_hold_step_scale
-            if quality_hold:
-                xt = current_uav.x
-                yt = current_uav.y
-
-        # Clamp step-to-step commanded motion to avoid snapping on estimate jumps.
-        if (self.have_uav_actual or self.have_uav_cmd) and eff_step_limit > 0.0:
+        anchor_distance_error, _, _ = self._anchor_errors(leader_for_follow, anchor_target, current_uav)
+        effective_follow_speed_mps = self._effective_follow_speed_mps(anchor_distance_error)
+        step_limit = effective_follow_speed_mps / self.tick_hz if effective_follow_speed_mps > 0.0 else 0.0
+        if step_limit > 0.0:
             dx = xt - current_uav.x
             dy = yt - current_uav.y
             step = math.hypot(dx, dy)
-            if step > eff_step_limit and step > 1e-9:
-                s = eff_step_limit / step
+            if step > step_limit and step > 1e-9:
+                s = step_limit / step
                 xt = current_uav.x + dx * s
                 yt = current_uav.y + dy * s
-        cmd_xy_delta = 0.0
-        if self.have_uav_actual or self.have_uav_cmd:
-            cmd_xy_delta = math.hypot(xt - current_uav.x, yt - current_uav.y)
 
-        if self.follow_state in ("HOLD", "DEGRADED") and (self.have_uav_actual or self.have_uav_cmd):
+        cmd_xy_delta = math.hypot(xt - current_uav.x, yt - current_uav.y)
+        target_x, target_y = self._leader_look_target_xy(leader_for_follow)
+        yaw_target = self._solve_yaw_to_target(
+            xt,
+            yt,
+            target_x,
+            target_y,
+        )
+        yaw_error_raw = yaw_target - current_uav.yaw
+        yaw_error = wrap_pi(yaw_error_raw)
+        yaw_actual_unwrapped = self._unwrap_angle_near(
+            current_uav.yaw,
+            self.last_debug_actual_yaw_unwrapped,
+        )
+        self.last_debug_actual_yaw_unwrapped = yaw_actual_unwrapped
+        yaw_target_unwrapped = yaw_actual_unwrapped + yaw_error
+        yaw_wrap_correction = yaw_error_raw - yaw_error
+        yaw_rate_rad_s = min(
+            max(self.follow_yaw_rate_rad_s, 0.0),
+            max(self.follow_yaw_rate_gain, 0.0) * abs(yaw_error),
+        )
+        yaw_step_limit = yaw_rate_rad_s / self.tick_hz if yaw_rate_rad_s > 0.0 else 0.0
+
+        if not self.follow_yaw:
             yaw_cmd = current_uav.yaw
-        elif freeze_yaw_for_status and (self.have_uav_actual or self.have_uav_cmd):
-            # Held reject states use stale geometry; keep the current camera heading
-            # instead of swinging toward a potentially wrong reacquire target.
+            yaw_mode = "follow_yaw_disabled"
+        elif self.yaw_update_xy_gate_m > 0.0 and cmd_xy_delta < self.yaw_update_xy_gate_m:
             yaw_cmd = current_uav.yaw
-        elif (self.have_uav_actual or self.have_uav_cmd) and self.quality_scale_enable and quality_scale <= self.quality_hold_step_scale:
+            yaw_mode = "xy_gate_hold"
+        elif self.yaw_deadband_rad > 0.0 and abs(yaw_error) < self.yaw_deadband_rad:
             yaw_cmd = current_uav.yaw
-        elif (
-            (self.have_uav_actual or self.have_uav_cmd)
-            and self.yaw_update_xy_gate_m > 0.0
-            and cmd_xy_delta < self.yaw_update_xy_gate_m
-        ):
-            # Avoid yaw chattering when the XY command is effectively stationary.
-            yaw_cmd = current_uav.yaw
-        elif (self.have_uav_actual or self.have_uav_cmd) and self.yaw_deadband_rad > 0.0:
-            if abs(wrap_pi(yaw_cmd - current_uav.yaw)) < self.yaw_deadband_rad:
-                yaw_cmd = current_uav.yaw
-        if (self.have_uav_actual or self.have_uav_cmd) and eff_yaw_step_limit > 0.0:
-            dyaw = wrap_pi(yaw_cmd - current_uav.yaw)
-            if abs(dyaw) > eff_yaw_step_limit:
-                yaw_cmd = wrap_pi(current_uav.yaw + math.copysign(eff_yaw_step_limit, dyaw))
+            yaw_mode = "deadband_hold"
+        elif yaw_step_limit > 0.0 and abs(yaw_error) > yaw_step_limit:
+            yaw_cmd = wrap_pi(current_uav.yaw + math.copysign(yaw_step_limit, yaw_error))
+            yaw_mode = "rate_limited"
+        else:
+            yaw_cmd = yaw_target
+            yaw_mode = "direct_target"
 
-        if (self.have_uav_actual or self.have_uav_cmd) and eff_deadband > 0.0:
-            if math.hypot(xt - current_uav.x, yt - current_uav.y) < eff_deadband:
-                xt = current_uav.x
-                yt = current_uav.y
+        yaw_cmd_delta = wrap_pi(yaw_cmd - current_uav.yaw)
 
-        # The Gazebo-facing simulator adapter owns set_pose. Follow only publishes
-        # the legacy UAV command topic so the external control contract stays stable.
-        self.publish_legacy_uav_command(xt, yt, self.z_alt, yaw_cmd)
+        if self.cmd_xy_deadband_m > 0.0 and cmd_xy_delta < self.cmd_xy_deadband_m:
+            xt = current_uav.x
+            yt = current_uav.y
 
-        # Publish commanded pose for rosbag/metrics
-        self.publish_pose_cmd(xt, yt, self.z_alt, yaw_cmd)
-        self.publish_pose_cmd_odom(xt, yt, self.z_alt, yaw_cmd)
+        z_cmd = self._compute_command_z(current_uav_z)
+        self.publish_legacy_uav_command(xt, yt, z_cmd, yaw_cmd)
+        self.publish_pose_cmd(xt, yt, z_cmd, yaw_cmd)
+        self.publish_pose_cmd_odom(xt, yt, z_cmd, yaw_cmd)
 
-        # Update internal command state
         self.uav_cmd = Pose2D(xt, yt, yaw_cmd)
         self.have_uav_cmd = True
         self.last_cmd_time = now
+        self._current_follow_geometry()
+        self._publish_follow_debug(
+            anchor_target,
+            current_uav=current_uav,
+            target_yaw=yaw_target,
+            yaw_error=yaw_error,
+            yaw_error_raw=yaw_error_raw,
+            yaw_target_unwrapped=yaw_target_unwrapped,
+            yaw_actual_unwrapped=yaw_actual_unwrapped,
+            yaw_wrap_correction=yaw_wrap_correction,
+            yaw_step_limit=yaw_step_limit,
+            yaw_cmd_delta=yaw_cmd_delta,
+            yaw_mode=yaw_mode,
+        )
 
 
 def main(args=None):

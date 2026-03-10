@@ -9,6 +9,11 @@ Recommended start/stop flow:
 1. `./run_tmux_1to1.sh warehouse`
 2. `./stop_tmux_1to1.sh warehouse`
 
+Recommended tmux variants:
+- normal follow: `./run_tmux_1to1.sh warehouse`
+- YOLO detection path: `./run_tmux_1to1.sh warehouse mode:=yolo`
+- YOLO tracker path: `./run_tmux_1to1.sh warehouse mode:=yolo tracker:=true`
+
 Current tmux default:
 - `layout:=panes`
 - row 1: `gazebo | spawn`
@@ -16,8 +21,14 @@ Current tmux default:
 - row 3: `follow`
 
 Current tmux default delays:
-- `gui:=false` -> `spawn=9s`, `localization/nav2=11s`, `follow=13s`
-- `gui:=true` -> `spawn=7s`, `localization/nav2=9s`, `follow=11s`
+- `gui:=true` -> `spawn=7s`, `localization/nav2=9s`, `follow=13s`
+- `gui:=false` -> `spawn=9s`, `localization/nav2=11s`, `follow=15s`
+
+Per-stage delay overrides now exist:
+- `spawn_delay_s:=...`
+- `localization_delay_s:=...`
+- `nav2_delay_s:=...`
+- `follow_delay_s:=...`
 
 Equivalent manual run order:
 1. `./run_gazebo_sim.sh warehouse`
@@ -26,168 +37,173 @@ Equivalent manual run order:
 4. `./run_nav2.sh`
 5. `./run_1to1_follow.sh warehouse`
 
-YOLO variant:
-- `./run_1to1_yolo.sh warehouse`
-- default runtime behavior: estimate-only follow/camera path with no UGV truth shared into the controller
-- estimate-mode YOLO now keeps the normal startup pose instead of forcing a farther reposition
-- estimate-mode YOLO still computes `/coord/leader_estimate_error` against `/<ugv>/amcl_pose_odom` by default
-- `./run_follow_control.sh` works against the same `/follow_uav` node in both odom and estimate modes
-- testing override: `./run_1to1_yolo.sh warehouse use_estimate:=false`
+### Main Runtime Chain
 
-### What Works Now
-
-The important follow fix is in place:
-- the follow stack still runs with `leader_mode:=odom`
-- but the actual leader topic is now `/<ugv>/amcl_pose_odom`
-- `/<ugv>/amcl_pose_odom` is synthesized from `/<ugv>/amcl_pose`
-- this is the source of truth going forward
-
-Important interpretation:
-- `leader_mode:=odom` now means "consume an `Odometry`-shaped leader topic"
-- it does **not** mean "use raw `/platform/odom`"
-- do **not** switch follow or dataset capture back to `/platform/odom` or `/platform/odom/filtered`
-- the YOLO path now defaults to `leader_mode:=estimate`; pass `use_estimate:=false` on `run_1to1_yolo.sh` to test the same stack with shared UGV pose
-- estimator held-estimate reuse is now disabled by default, so reject/miss states surface directly instead of reusing the last target for `*_HOLD`
-
-Relevant files:
-- `src/lrs_halmstad/launch/run_follow_motion.launch.py`
-- `src/lrs_halmstad/lrs_halmstad/pose_cov_to_odom.py`
-- `src/lrs_halmstad/lrs_halmstad/follow_uav_odom.py`
-- `src/lrs_halmstad/lrs_halmstad/camera_tracker.py`
-- `src/lrs_halmstad/lrs_halmstad/sim_dataset_capture.py`
-
-### Run Script Map
-
-`run_tmux_1to1.sh`
-- recommended top-level launcher
-- starts Gazebo, spawn, localization, Nav2, and either follow or YOLO-follow in tmux
-- defaults to pane layout
-- accepts common follow/spawn overrides like `camera:=detached`, `camera:=attached`, `height:=...`, `mount_pitch_deg:=...`, `uav_name:=...`
-- accepts `mode:=follow|yolo` and `yolo:=true|false`; `mode:=yolo` switches the last pane/window to `run_1to1_yolo.sh`
-
-`stop_tmux_1to1.sh`
-- recommended stop path
-- sends `Ctrl-C` to `follow`, `localization`, and `nav2` together
-- waits `5s`
-- then stops `spawn`
-- then stops Gazebo
-- then kills the tmux session and does fallback cleanup for leftover ROS/Gazebo processes and stale `/tmp/halmstad_ws` state files
-
-`run_gazebo_sim.sh`
-- builds the workspace, sources ROS, and launches `managed_clearpath_sim.launch.py`
-- writes `/tmp/halmstad_ws/gazebo_sim.pid` and `/tmp/halmstad_ws/gazebo_sim.world`
-- default GUI is `true` unless overridden
-
-`run_spawn_uav.sh`
-- spawns the UAV for the current world
-- if Gazebo is already running, it auto-detects the world from `/tmp/halmstad_ws/gazebo_sim.world`
-- default camera path is detached because the underlying launch default is `uav_camera_mode:=detached_model`
-- if Gazebo exits, this wrapper shuts its launch down too
-
-`run_localization.sh`
-- launches localization against the chosen map
-- for `warehouse`, it defaults to Clearpath's warehouse map
-
-`run_nav2.sh`
-- launches the Nav2 stack for the UGV
-
-`run_1to1_follow.sh`
-- launches `run_1to1_follow.launch.py`
-- uses `ugv_mode:=nav2`
-- uses `leader_mode:=odom`
-- important: the downstream launch default for that odom topic is `/<ugv>/amcl_pose_odom`, not raw platform odom
-- camera overrides like `camera:=detached` and `camera:=attached` map to `uav_camera_mode:=...`
-
-`run_capture_dataset.sh`
-- launches `sim_dataset_capture`
-- explicitly sets `target_pose_topic:=/a201_0000/amcl_pose_odom`
-- this wrapper is already aligned with the AMCL-based follow fix
-
-`run_follow_control.sh`
-- runtime helper for live follow tuning
-- default mode is keyboard control of `d_target` / `z_alt`
-- `--mode params` is kept as an alias for the same keyboard tuning path
-- random sweep mode is still available with `--mode random`
-
-`run_record_pose_alignment.sh` / `run_analyze_pose_alignment.py`
-- one-off diagnostics for comparing raw odom against AMCL
-- useful for analysis, not part of the normal follow launch path
-
-### Launch Call Chain
-
-High-level wrapper chain:
+Top-level wrapper chain:
 - `run_tmux_1to1.sh`
   - runs `run_gazebo_sim.sh`
   - runs `run_spawn_uav.sh`
   - runs `run_localization.sh`
   - runs `run_nav2.sh`
-  - runs `run_1to1_follow.sh` or `run_1to1_yolo.sh` depending on `mode:=follow|yolo`
+  - runs `run_1to1_follow.sh` or `run_1to1_yolo.sh`
 
 Follow launch chain:
 - `run_1to1_follow.sh`
   - launches `src/lrs_halmstad/launch/run_1to1_follow.launch.py`
 - `run_1to1_follow.launch.py`
-  - mostly acts as a world-specific wrapper
-  - forwards arguments into `src/lrs_halmstad/launch/run_follow_motion.launch.py`
+  - mostly forwards world/runtime arguments
+  - includes `src/lrs_halmstad/launch/run_follow_motion.launch.py`
 - `run_follow_motion.launch.py`
-  - starts the actual runtime nodes:
+  - starts the runtime nodes:
     - `uav_simulator`
     - `ugv_amcl_to_odom` (`pose_cov_to_odom`)
-    - `follow_uav` (`follow_uav_odom` when `leader_mode:=odom`)
+    - `follow_uav_odom` or `follow_uav`
     - `camera_tracker`
     - `ugv_nav2_driver`
-    - optionally `leader_estimator` for non-odom / perception flows
+    - optional perception node: `leader_detector` or `leader_tracker`
+    - optional `leader_estimator`
 
 Spawn chain:
 - `run_spawn_uav.sh`
-  - launches `src/lrs_halmstad/launch/spawn_uav_1to1.launch.py`
+  - launches `spawn_uav_1to1.launch.py`
 - `spawn_uav_1to1.launch.py`
-  - always spawns the UAV body through `spawn_robot.launch.py`
-  - if `uav_camera_mode:=detached_model`, also spawns the detached camera/gimbal through `spawn_gimbal.launch.py`
-  - starts the Gazebo `set_pose` bridge
-  - starts the detached camera image/info bridge after a short delay
+  - always spawns the UAV body
+  - spawns detached camera/gimbal when `uav_camera_mode:=detached_model`
+  - starts the pose bridge and delayed camera bridge
 
 Important separation:
-- `run_spawn_uav.sh` creates the visible Gazebo entities
-- `run_1to1_follow.sh` starts the logic that moves the UAV and points the camera during the run
-- the UAV does **not** actually "follow" anything until the follow launch is running
+- `run_spawn_uav.sh` creates the Gazebo entities
+- `run_1to1_follow.sh` / `run_1to1_yolo.sh` start the runtime logic
+- nothing actually follows until the follow launch is running
+
+### UGV / Nav2 State
+
+The validated UGV truth path is still:
+- `/<ugv>/amcl_pose`
+- `pose_cov_to_odom`
+- `/<ugv>/amcl_pose_odom`
+
+Important interpretation:
+- `leader_mode:=odom` means "consume an `Odometry` topic"
+- the validated odom topic is `/<ugv>/amcl_pose_odom`
+- do not switch the active follow path back to raw `/platform/odom`
+- do not switch dataset capture back to raw `/platform/odom`
+
+Current relevant files:
+- `src/lrs_halmstad/launch/run_follow_motion.launch.py`
+- `src/lrs_halmstad/lrs_halmstad/pose_cov_to_odom.py`
+- `src/lrs_halmstad/lrs_halmstad/follow_uav_odom.py`
+- `src/lrs_halmstad/lrs_halmstad/ugv_nav2_driver.py`
+- `src/lrs_halmstad/lrs_halmstad/sim_dataset_capture.py`
+
+Clearpath path:
+- Gazebo sim, localization, Nav2, and SLAM now use the workspace Clearpath copy:
+  - `src/lrs_halmstad/clearpath`
+- the old `/home/ruben/clearpath` path is no longer the active runtime path
+
+### Perception Split
+
+This is the biggest structural change from earlier in the project.
+
+Current active perception architecture:
+- `leader_detector.py`
+  - plain prediction node
+  - runs a model on camera images
+  - publishes the best detection to `/coord/leader_detection`
+- `leader_tracker.py`
+  - separate Ultralytics `track()` node
+  - uses tracker configs from `src/lrs_halmstad/config/trackers`
+  - also publishes tracked detections to `/coord/leader_detection`
+- `leader_estimator.py`
+  - estimator-only node
+  - consumes `/coord/leader_detection`
+  - projects detection into world pose
+  - may use OBB corners to derive heading
+  - publishes `/coord/leader_estimate`, status, fault, debug image, and optional error-to-truth
+
+Important consequence:
+- `leader_estimator.py` is no longer the predictor/tracker brain
+- the prediction backend is now swappable
+- detector and tracker are separate runtime choices
+
+Current selection logic:
+- `external_detection_node:=detector`
+  - starts `leader_detector`
+- `external_detection_node:=tracker`
+  - starts `leader_tracker`
+- `run_1to1_yolo.sh tracker:=true`
+  - sets `external_detection_node:=tracker`
+
+### YOLO / Tracker Path
+
+Active YOLO wrapper:
+- `./run_1to1_yolo.sh warehouse`
+
+Current default behavior of `run_1to1_yolo.sh`:
+- `use_estimate:=true`
+- `leader_mode:=estimate`
+- `start_leader_estimator:=true`
+- `external_detection_enable:=true`
+- `external_detection_node:=detector`
+- `leader_range_mode:=ground`
+- if `use_estimate:=true` and not overridden:
+  - `startup_reposition_enable:=true`
+  - `uav_start_x:=-7.0`
+  - `uav_start_z:=7.0`
+  - `leader_actual_heading_enable:=true`
+
+Current test variants:
+- shared truth pose control instead of estimate:
+  - `./run_1to1_yolo.sh warehouse use_estimate:=false`
+- tracker instead of plain detector:
+  - `./run_1to1_yolo.sh warehouse tracker:=true`
+- explicit tracker config:
+  - `./run_1to1_yolo.sh warehouse tracker:=true tracker_config:=trackers/botsort.yaml`
+- OBB weights:
+  - `./run_1to1_yolo.sh warehouse obb:=true`
+
+Current weights resolution:
+- detection default root: `models/detection/mymodels`
+- OBB default root: `models/obb/mymodels`
+- plain detector default weight:
+  - `detection/mymodels/warehouse_v1-v1-yolo26n.pt`
+- OBB default weight:
+  - `obb/mymodels/warehouse-v1-yolo26n-obb.pt`
 
 ### Follow Data Flow
 
-UGV side:
-- `run_localization.sh` starts AMCL and publishes `/<ugv>/amcl_pose`
-- `ugv_amcl_to_odom` converts `/<ugv>/amcl_pose` into `/<ugv>/amcl_pose_odom`
-- `ugv_nav2_driver` sends NavigateToPose goals and keeps the UGV moving along the configured route
-
-UAV follow side:
+Normal odom follow:
 - `follow_uav_odom`
   - subscribes to `/<ugv>/amcl_pose_odom`
   - subscribes to `/<uav>/pose`
-  - computes the next desired UAV pose from leader position, `d_target`, `z_alt`, yaw logic, and current limits
-  - publishes `/<uav>/pose_cmd` and `/<uav>/pose_cmd/odom`
+  - publishes `/<uav>/pose_cmd`
+  - publishes `/<uav>/pose_cmd/odom`
+
+Estimate follow:
+- `leader_detector` or `leader_tracker`
+  - publishes `/coord/leader_detection`
+- `leader_estimator`
+  - publishes `/coord/leader_estimate`
+  - publishes `/coord/leader_estimate_status`
+  - publishes `/coord/leader_estimate_fault`
+- `follow_uav`
+  - subscribes to `/coord/leader_estimate`
+  - may also use shared AMCL heading if enabled
 
 Camera side:
 - `camera_tracker`
-  - subscribes to the same AMCL-derived leader topic
-  - subscribes to `/<uav>/pose`
-  - also listens to `/<uav>/pose_cmd` so pan/tilt can react to commanded motion immediately
-  - computes the desired look-at point and publishes:
-    - `/<uav>/update_tilt`
+  - subscribes to the same leader topic used by the active follow path
+  - also listens to `/coord/leader_estimate_status`
+  - publishes:
     - `/<uav>/update_pan`
+    - `/<uav>/update_tilt`
     - `/<uav>/camera/target/*`
 
 Simulator side:
 - `uav_simulator`
-  - subscribes to `/<uav>/pose_cmd`
-  - subscribes to `/<uav>/update_tilt` and `/<uav>/update_pan`
-  - updates the UAV body pose in Gazebo
-  - if camera mode is detached, also updates the detached camera model pose in Gazebo
-  - publishes `/<uav>/pose`, `/<uav>/camera/actual/*`, and follow/camera debug topics
-
-Key takeaway:
-- the AMCL topic drives both UAV following and camera targeting
-- raw `/platform/odom` is no longer part of the validated follow path
-- if the UAV seems numerically correct but visually wrong, check whether the leader source is still `/<ugv>/amcl_pose_odom`
+  - consumes `/<uav>/pose_cmd`
+  - consumes `/<uav>/update_pan` and `/<uav>/update_tilt`
+  - publishes `/<uav>/pose` and follow/camera debug topics
 
 ### Camera Baseline
 
@@ -198,31 +214,16 @@ Current validated baseline:
 - `tilt_enable: true`
 - `default_pan_deg: 0.0`
 - `default_tilt_deg: -45.0`
-- `run_1to1_yolo.sh` uses the same `-45.0` fallback tilt baseline, but in estimate mode it seeds/repositions the UAV farther back before the first estimate arrives
-
-Current shared look-target offsets:
-- `leader_look_target_x_m: 0.0`
-- `leader_look_target_y_m: 0.0`
-- `camera_look_target_z_m: 0.3`
 
 Important consequence:
-- `camera:=attached` is now an override path, not the baseline
-- detached is the default because it visually tracks pan/tilt correctly in Gazebo
+- `camera:=attached` is now an override path, not the default baseline
+- detached remains the primary path for Gazebo visual correctness
 
-### Clock / Sim Time
+### Current Defaults Worth Remembering
 
-Current Gazebo sim launch uses the guarded clock path:
-- Gazebo `/clock` -> ROS `/clock_raw`
-- `clock_guard.py` republishes monotonic ROS `/clock`
+From `run_follow_defaults.yaml`:
 
-Runtime check:
-- `ros2 topic info /clock -v`
-- expected publisher count: `1`
-- expected publisher: `clock_guard`
-
-### Current Tuning Defaults
-
-From `src/lrs_halmstad/config/run_follow_defaults.yaml`:
+Follow controller:
 - `d_target: 7.0`
 - `z_alt: 7.0`
 - `tick_hz: 20.0`
@@ -234,57 +235,116 @@ From `src/lrs_halmstad/config/run_follow_defaults.yaml`:
 - `follow_yaw_rate_gain: 2.0`
 - `yaw_deadband_rad: 0.02`
 - `yaw_update_xy_gate_m: 0.0`
-- `smooth_alpha: 1.0`
 
-Camera tracker defaults:
+Camera tracker:
 - `tick_hz: 20.0`
 - `default_pan_deg: 0.0`
 - `default_tilt_deg: -45.0`
 - `pan_enable: true`
 - `tilt_enable: true`
-- `tilt_deadband_deg: 0.5`
+
+Estimator:
+- `est_hz: 20.0`
+- `range_mode: auto`
+- `constant_range_m: 7.0`
+- `use_depth_range: true`
+- `external_detection_timeout_s: 1.0`
+
+Detector:
+- `predict_hz: 20.0`
+- `conf_threshold: 0.12`
+- `bbox_continuity_weight: 0.10`
+- `bbox_continuity_max_px: 180.0`
+
+Tracker:
+- `predict_hz: 20.0`
+- `tracker_config: trackers/botsort.yaml`
+- `conf_threshold: 0.12`
+- `iou_threshold: 0.45`
+
+### Runtime Helpers
+
+`run_follow_control.sh`
+- live tuning helper for follow parameters
+- current useful modes:
+  - default keyboard mode for `d_target` / `z_alt`
+  - `--mode params`
+  - `--mode random`
+- the temporary direct manual pose-steering override path was removed
+
+`run_follow_debug.sh`
+- runtime analyzer for follow/camera behavior
+- logs under:
+  - `debug_logs/follow_debug/`
+- useful for:
+  - body yaw vs camera pan separation
+  - anchor/XY error
+  - heading-source inspection
+  - estimator state/fault visibility
 
 ### Dataset State
-
-Old dataset warning:
-- older captures made against raw `/platform/odom` are suspect
-- pose-alignment analysis showed the odom -> AMCL correction is meaningfully time-varying
-- that means the old raw-odom captures are not safely fixable with one static 2D transform
 
 Current rule:
 - new dataset capture must use `/<ugv>/amcl_pose_odom`
 - `run_capture_dataset.sh` already enforces this
 
+Current dataset additions:
+- `run_dataset_make_obb.py`
+  - creates `labels_obb/` from saved metadata/projected points
+- current generated OBB label dirs:
+  - `datasets/warehouse_v1/run1/labels_obb`
+  - `datasets/warehouse_v1/run2/labels_obb`
+
 Current dataset note:
-- `datasets/warehouse_v1/run1` was manually QA-pruned after removing bad overlays
-- corresponding `images`, `labels`, and `metadata` were deleted too, so that run is internally consistent again
+- `datasets/warehouse_v1/run1` and `run2` now have OBB labels generated separately under `labels_obb`
+- plain detection labels under `labels/` were left untouched
 
-### Debug / Verification
+### What Is Obsolete
 
-Useful runtime checks:
-- `/dji0/follow/target/*`
-- `/dji0/follow/actual/*`
-- `/dji0/follow/error/*`
-- `/dji0/camera/target/*`
-- `/dji0/camera/actual/*`
+These old descriptions should not be trusted anymore:
+- `leader_estimator` as the monolithic YOLO + tracking + debounce + hold + reject node
+- notes about estimator hold/debounce reuse being the main active behavior
+- notes about the old direct YOLO path through `run_yolo.sh` / `run_follow_yolo.launch.py`
+- notes about manual pose-steering keyboard override in `run_follow_control.sh`
+- notes about the old `/home/ruben/clearpath` runtime path
 
-Pose-source validation:
-- compare `/a201_0000/platform/odom`, `/a201_0000/platform/odom/filtered`, and `/a201_0000/amcl_pose`
-- if the image drifts while the debug numbers look self-consistent, validate the pose source before retuning yaw or camera math
+Also obsolete in the runbook:
+- `run_record_pose_alignment.sh`
+- `run_analyze_pose_alignment.py`
+
+Those files are not present in the workspace and are not part of the active workflow anymore.
 
 ### Guardrails
 
 Things that should not be "fixed back":
 - do not switch follow back to raw `/platform/odom`
 - do not switch dataset capture back to raw `/platform/odom`
+- do not fold model prediction back into `leader_estimator.py`
+- do not add tracker logic into `leader_detector.py`
+- keep predictor/tracker/estimator as separate concerns
 - do not remove `clock_guard` unless the backward-jump problem is proven fixed
 - do not treat attached camera mode as the default baseline
 
+### Current Loose Ends
+
+Important current handoff note:
+- `leader_tracker.py` exists and is wired into launch/setup, but it is currently a new file and must be added to git when committing
+
+Validation state of the latest refactor:
+- `python3 -m py_compile` passed for the touched Python and launch files
+- `bash -n` passed for the touched shell wrappers
+- a full end-to-end ROS/Gazebo verification was **not** run after the latest detector/tracker/estimator split
+
 ### Build / Validation State
 
-Recent validation status:
-- `colcon build --packages-select lrs_halmstad` passed for the core package during the follow-camera work
-- recent wrapper/script changes were checked with `bash -n` and `python3 -m py_compile`
+If testing the new perception split:
+1. clean/rebuild `lrs_halmstad`
+2. restart the tmux stack
+3. verify which external perception node is active:
+   - `leader_detector`
+   - or `leader_tracker`
+4. verify `/coord/leader_detection` is alive
+5. verify `leader_estimator` is consuming it
 
 If a new chat continues from here, start by reading:
 - this file

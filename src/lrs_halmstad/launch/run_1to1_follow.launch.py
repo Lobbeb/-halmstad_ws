@@ -43,7 +43,7 @@ def generate_launch_description():
     leader_perception_enable_arg = DeclareLaunchArgument('leader_perception_enable', default_value='false')
     start_estimator_arg = DeclareLaunchArgument('start_leader_estimator', default_value='auto')
     startup_reposition_enable_arg = DeclareLaunchArgument('startup_reposition_enable', default_value='false')
-    follow_yaw_arg = DeclareLaunchArgument('follow_yaw', default_value='false')
+    follow_yaw_arg = DeclareLaunchArgument('follow_yaw', default_value='true')
     uav_start_x_arg = DeclareLaunchArgument(
         'uav_start_x',
         default_value='-2.0',
@@ -100,11 +100,32 @@ def generate_launch_description():
         'leader_actual_pose_enable',
         default_value='true',
     )
+    leader_actual_heading_enable_arg = DeclareLaunchArgument(
+        'leader_actual_heading_enable',
+        default_value='true',
+    )
+    leader_actual_heading_topic_arg = DeclareLaunchArgument(
+        'leader_actual_heading_topic',
+        default_value=LaunchConfiguration('leader_actual_pose_topic'),
+    )
+    external_detection_enable_arg = DeclareLaunchArgument(
+        'external_detection_enable',
+        default_value='false',
+    )
+    external_detection_node_arg = DeclareLaunchArgument(
+        'external_detection_node',
+        default_value='detector',
+    )
+    external_detection_topic_arg = DeclareLaunchArgument(
+        'external_detection_topic',
+        default_value='/coord/leader_detection',
+    )
     leader_range_mode_arg = DeclareLaunchArgument('leader_range_mode', default_value='ground')
     leader_constant_range_m_arg = DeclareLaunchArgument('leader_constant_range_m', default_value='5.0')
     target_class_name_arg = DeclareLaunchArgument('target_class_name', default_value='')
     target_class_id_arg = DeclareLaunchArgument('target_class_id', default_value='-1')
     yolo_device_arg = DeclareLaunchArgument('yolo_device', default_value='cpu')
+    tracker_config_arg = DeclareLaunchArgument('tracker_config', default_value='trackers/botsort.yaml')
     event_topic_arg = DeclareLaunchArgument('event_topic', default_value='/coord/events')
     ugv_start_delay_arg = DeclareLaunchArgument('ugv_start_delay_s', default_value='0.0')
 
@@ -143,11 +164,17 @@ def generate_launch_description():
             'yolo_weights': LaunchConfiguration('yolo_weights'),
             'leader_actual_pose_topic': LaunchConfiguration('leader_actual_pose_topic'),
             'leader_actual_pose_enable': LaunchConfiguration('leader_actual_pose_enable'),
+            'leader_actual_heading_enable': LaunchConfiguration('leader_actual_heading_enable'),
+            'leader_actual_heading_topic': LaunchConfiguration('leader_actual_heading_topic'),
+            'external_detection_enable': LaunchConfiguration('external_detection_enable'),
+            'external_detection_node': LaunchConfiguration('external_detection_node'),
+            'external_detection_topic': LaunchConfiguration('external_detection_topic'),
             'leader_range_mode': LaunchConfiguration('leader_range_mode'),
             'leader_constant_range_m': LaunchConfiguration('leader_constant_range_m'),
             'target_class_name': LaunchConfiguration('target_class_name'),
             'target_class_id': LaunchConfiguration('target_class_id'),
             'yolo_device': LaunchConfiguration('yolo_device'),
+            'tracker_config': LaunchConfiguration('tracker_config'),
             'event_topic': LaunchConfiguration('event_topic'),
             'ugv_start_delay_s': LaunchConfiguration('ugv_start_delay_s'),
         }.items(),
@@ -184,11 +211,17 @@ def generate_launch_description():
         yolo_weights_arg,
         leader_actual_pose_topic_arg,
         leader_actual_pose_enable_arg,
+        leader_actual_heading_enable_arg,
+        leader_actual_heading_topic_arg,
+        external_detection_enable_arg,
+        external_detection_node_arg,
+        external_detection_topic_arg,
         leader_range_mode_arg,
         leader_constant_range_m_arg,
         target_class_name_arg,
         target_class_id_arg,
         yolo_device_arg,
+        tracker_config_arg,
         event_topic_arg,
         ugv_start_delay_arg,
         follow,

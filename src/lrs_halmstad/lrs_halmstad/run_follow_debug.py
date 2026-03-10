@@ -78,6 +78,7 @@ class FollowDebugNode(Node):
             "manual_override_enable",
             "leader_input_type",
             "startup_reposition_enable",
+            "leader_actual_heading_enable",
         ]
         self.camera_param_names = [
             "pan_enable",
@@ -107,6 +108,11 @@ class FollowDebugNode(Node):
 
         self.last_yaw_mode: Optional[str] = None
         self.last_yaw_mode_rx_s: Optional[float] = None
+        self.last_leader_heading_source: Optional[str] = None
+        self.last_leader_heading_source_rx_s: Optional[float] = None
+        self.leader_follow_yaw_hist: Deque[Sample] = deque(maxlen=self.history_limit)
+        self.leader_estimate_yaw_hist: Deque[Sample] = deque(maxlen=self.history_limit)
+        self.leader_actual_heading_yaw_hist: Deque[Sample] = deque(maxlen=self.history_limit)
 
         self.create_subscription(String, "/coord/leader_estimate_status", self.on_estimator_status, 10)
         self.create_subscription(String, "/coord/leader_estimate_fault", self.on_estimator_fault, 10)
@@ -166,6 +172,30 @@ class FollowDebugNode(Node):
         self.create_subscription(Float32, f"/{self.uav_name}/follow/actual/yaw_rad", self.on_follow_actual_yaw, 10)
         self.create_subscription(Float32, f"/{self.uav_name}/follow/error/yaw_rad", self.on_follow_error_yaw, 10)
         self.create_subscription(String, f"/{self.uav_name}/follow/debug/yaw_mode", self.on_yaw_mode, 10)
+        self.create_subscription(
+            String,
+            f"/{self.uav_name}/follow/debug/leader_heading_source",
+            self.on_leader_heading_source,
+            10,
+        )
+        self.create_subscription(
+            Float32,
+            f"/{self.uav_name}/follow/debug/leader_follow_yaw_rad",
+            self.on_leader_follow_yaw,
+            10,
+        )
+        self.create_subscription(
+            Float32,
+            f"/{self.uav_name}/follow/debug/leader_estimate_yaw_rad",
+            self.on_leader_estimate_yaw,
+            10,
+        )
+        self.create_subscription(
+            Float32,
+            f"/{self.uav_name}/follow/debug/leader_actual_heading_yaw_rad",
+            self.on_leader_actual_heading_yaw,
+            10,
+        )
 
         self.param_timer = self.create_timer(2.0, self.refresh_params)
         self.report_timer = self.create_timer(self.report_period_s, self.report)
@@ -280,6 +310,19 @@ class FollowDebugNode(Node):
         self.last_yaw_mode = msg.data.strip()
         self.last_yaw_mode_rx_s = self.now_s()
 
+    def on_leader_heading_source(self, msg: String) -> None:
+        self.last_leader_heading_source = msg.data.strip()
+        self.last_leader_heading_source_rx_s = self.now_s()
+
+    def on_leader_follow_yaw(self, msg: Float32) -> None:
+        self.append_sample(self.leader_follow_yaw_hist, float(msg.data))
+
+    def on_leader_estimate_yaw(self, msg: Float32) -> None:
+        self.append_sample(self.leader_estimate_yaw_hist, float(msg.data))
+
+    def on_leader_actual_heading_yaw(self, msg: Float32) -> None:
+        self.append_sample(self.leader_actual_heading_yaw_hist, float(msg.data))
+
     def refresh_params(self) -> None:
         if not self._follow_params_pending and self.follow_param_client.services_are_ready():
             future = self.follow_param_client.get_parameters(self.follow_param_names)
@@ -358,9 +401,12 @@ class FollowDebugNode(Node):
         return self.estimator_status.get("state", "none")
 
     def estimator_reason(self) -> str:
+        state = self.estimator_state()
         reason = self.estimator_status.get("state_reason", "")
         if reason and reason != "none":
             return reason
+        if state in {"OK", "running", "REACQUIRE"}:
+            return "none"
         reason = self.estimator_fault.get("reason", "")
         return reason or "none"
 
@@ -433,11 +479,16 @@ class FollowDebugNode(Node):
         tilt_now = self.latest(self.tilt_hist)
 
         follow_yaw = self.follow_params.get("follow_yaw", "na")
+        actual_heading_enable = self.follow_params.get("leader_actual_heading_enable", "na")
         manual_override = self.follow_params.get("manual_override_enable", "na")
         startup_reposition = self.follow_params.get("startup_reposition_enable", "na")
         pan_enable = self.camera_params.get("pan_enable", "na")
         tilt_enable = self.camera_params.get("tilt_enable", "na")
         yaw_mode = self.last_yaw_mode or "na"
+        leader_heading_source = self.last_leader_heading_source or "na"
+        leader_follow_yaw = self.latest(self.leader_follow_yaw_hist)
+        leader_estimate_yaw = self.latest(self.leader_estimate_yaw_hist)
+        leader_actual_heading_yaw = self.latest(self.leader_actual_heading_yaw_hist)
         anchor_xy = self.anchor_target_xy
         actual_xy = self.pose_actual_xy
         cmd_xy = self.pose_cmd_xy
@@ -457,6 +508,13 @@ class FollowDebugNode(Node):
                 f"cmd_delta={self.fmt_deg(body_cmd_delta, radians=True)} "
                 f" actual_delta={self.fmt_deg(body_actual_delta, radians=True)} "
                 f" follow_yaw={follow_yaw} yaw_mode={yaw_mode}"
+            ),
+            (
+                "  Heading: "
+                f"source={leader_heading_source} "
+                f"follow={self.fmt_deg(leader_follow_yaw, radians=True)} "
+                f"estimate={self.fmt_deg(leader_estimate_yaw, radians=True)} "
+                f"actual={self.fmt_deg(leader_actual_heading_yaw, radians=True)}"
             ),
             (
                 "  Camera: "
@@ -481,6 +539,7 @@ class FollowDebugNode(Node):
             ),
             (
                 "  Control: "
+                f"actual_heading_enable={actual_heading_enable} "
                 f"manual_override={manual_override} "
                 f"startup_reposition={startup_reposition}"
             ),

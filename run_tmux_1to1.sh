@@ -105,15 +105,15 @@ for arg in "$@"; do
       SPAWN_ARGS+=("$arg")
       FOLLOW_ARGS+=("$arg")
       ;;
-    follow_yaw:=*|pan_enable:=*|use_tilt:=*|tilt_enable:=*|camera_default_tilt_deg:=*)
+    follow_yaw:=*|pan_enable:=*|use_tilt:=*|tilt_enable:=*|camera_default_tilt_deg:=*|use_actual_heading:=*|leader_actual_heading_enable:=*|leader_actual_heading_topic:=*)
       FOLLOW_ARGS+=("$arg")
       ;;
-    weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*)
+    weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*|tracker:=*|external_detection_node:=*|tracker_config:=*)
       FOLLOW_ARGS+=("$arg")
       ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [world] [mode:=follow|yolo] [camera:=detached|attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [obb:=true|false] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes]" >&2
+      echo "Usage: $0 [world] [mode:=follow|yolo] [camera:=detached|attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [use_actual_heading:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [obb:=true|false] [tracker:=true|false] [external_detection_node:=detector|tracker] [tracker_config:=trackers/botsort.yaml] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes]" >&2
       exit 2
       ;;
   esac
@@ -132,7 +132,7 @@ esac
 if [ "$MODE" != "yolo" ]; then
   for arg in "${FOLLOW_ARGS[@]}"; do
     case "$arg" in
-      weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*)
+      weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*|tracker:=*|external_detection_node:=*|tracker_config:=*)
         echo "Argument '$arg' requires mode:=yolo" >&2
         exit 2
         ;;

@@ -116,6 +116,26 @@ class FollowDebugPublishers:
             f"/{uav_name}/follow/debug/yaw_mode",
             10,
         )
+        self.follow_debug_leader_heading_source_pub = node.create_publisher(
+            String,
+            f"/{uav_name}/follow/debug/leader_heading_source",
+            10,
+        )
+        self.follow_debug_leader_follow_yaw_pub = node.create_publisher(
+            Float32,
+            f"/{uav_name}/follow/debug/leader_follow_yaw_rad",
+            10,
+        )
+        self.follow_debug_leader_estimate_yaw_pub = node.create_publisher(
+            Float32,
+            f"/{uav_name}/follow/debug/leader_estimate_yaw_rad",
+            10,
+        )
+        self.follow_debug_leader_actual_heading_yaw_pub = node.create_publisher(
+            Float32,
+            f"/{uav_name}/follow/debug/leader_actual_heading_yaw_rad",
+            10,
+        )
 
     def publish(
         self,
@@ -144,6 +164,10 @@ class FollowDebugPublishers:
         yaw_step_limit: float | None = None,
         yaw_cmd_delta: float | None = None,
         yaw_mode: str | None = None,
+        leader_heading_source: str | None = None,
+        leader_follow_yaw: float | None = None,
+        leader_estimate_yaw: float | None = None,
+        leader_actual_heading_yaw: float | None = None,
     ) -> None:
         anchor_msg = PoseStamped()
         anchor_msg.header.stamp = stamp
@@ -181,6 +205,10 @@ class FollowDebugPublishers:
         self._publish_optional_scalar(self.follow_debug_yaw_step_limit_pub, yaw_step_limit)
         self._publish_optional_scalar(self.follow_debug_yaw_cmd_delta_pub, yaw_cmd_delta)
         self._publish_optional_string(self.follow_debug_yaw_mode_pub, yaw_mode)
+        self._publish_optional_string(self.follow_debug_leader_heading_source_pub, leader_heading_source)
+        self._publish_optional_scalar(self.follow_debug_leader_follow_yaw_pub, leader_follow_yaw)
+        self._publish_optional_scalar(self.follow_debug_leader_estimate_yaw_pub, leader_estimate_yaw)
+        self._publish_optional_scalar(self.follow_debug_leader_actual_heading_yaw_pub, leader_actual_heading_yaw)
 
     @staticmethod
     def _publish_scalar(pub, value: float) -> None:

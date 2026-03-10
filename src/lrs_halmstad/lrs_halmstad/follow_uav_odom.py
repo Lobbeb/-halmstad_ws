@@ -77,7 +77,7 @@ class FollowUavOdom(Node):
         self.declare_parameter("startup_nudge_dx_m", 0.30)
         self.declare_parameter("startup_nudge_dy_m", 0.0)
 
-        self.declare_parameter("follow_yaw", False)
+        self.declare_parameter("follow_yaw", True)
         self.declare_parameter("pose_timeout_s", 3.0)
         self.declare_parameter("min_cmd_period_s", 0.05)
         self.declare_parameter("smooth_alpha", 1.0)

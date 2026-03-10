@@ -7,7 +7,11 @@ SIM_WORLD_FILE="$STATE_DIR/gazebo_sim.world"
 WORLD="warehouse"
 EXTRA_ARGS=()
 USE_ESTIMATE="true"
+USE_ACTUAL_HEADING=""
+HAVE_LEADER_ACTUAL_HEADING_ENABLE="false"
 USE_OBB="false"
+USE_TRACKER="false"
+EXTERNAL_DETECTION_NODE="detector"
 WEIGHTS_REL=""
 MODEL_SUBDIR=""
 HAVE_UAV_START_X="false"
@@ -15,7 +19,7 @@ HAVE_UAV_START_Z="false"
 HAVE_STARTUP_REPOSITION_ENABLE="false"
 DEFAULT_CUSTOM_WEIGHTS="detection/mymodels/warehouse_v1-v1-yolo26n.pt"
 DEFAULT_DETECTION_WEIGHTS="detection/mymodels/warehouse_v1-v1-yolo26n.pt"
-DEFAULT_OBB_WEIGHTS="obb/yolo26/yolo26l-obb.pt"
+DEFAULT_OBB_WEIGHTS="obb/mymodels/warehouse-v1-yolo26n-obb.pt"
 
 if [ -f "$SIM_WORLD_FILE" ]; then
   sim_world="$(cat "$SIM_WORLD_FILE" 2>/dev/null || true)"
@@ -73,11 +77,31 @@ for arg in "$@"; do
     use_estimate:=*)
       USE_ESTIMATE="${arg#use_estimate:=}"
       ;;
+    use_actual_heading:=*)
+      USE_ACTUAL_HEADING="${arg#use_actual_heading:=}"
+      ;;
+    leader_actual_heading_enable:=*)
+      USE_ACTUAL_HEADING="${arg#leader_actual_heading_enable:=}"
+      HAVE_LEADER_ACTUAL_HEADING_ENABLE="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    leader_actual_heading_topic:=*)
+      EXTRA_ARGS+=("$arg")
+      ;;
     folder:=*|dir:=*|subdir:=*)
       MODEL_SUBDIR="${arg#*:=}"
       ;;
     obb:=*)
       USE_OBB="${arg#obb:=}"
+      ;;
+    tracker:=*)
+      USE_TRACKER="${arg#tracker:=}"
+      ;;
+    external_detection_node:=*)
+      EXTERNAL_DETECTION_NODE="${arg#external_detection_node:=}"
+      ;;
+    tracker_config:=*)
+      EXTRA_ARGS+=("$arg")
       ;;
     uav_start_x:=*)
       HAVE_UAV_START_X="true"
@@ -117,6 +141,31 @@ case "$USE_OBB" in
     ;;
 esac
 
+if [ -n "$USE_ACTUAL_HEADING" ]; then
+  case "$USE_ACTUAL_HEADING" in
+    true|false)
+      ;;
+    *)
+      echo "Invalid use_actual_heading option: $USE_ACTUAL_HEADING" >&2
+      echo "Use use_actual_heading:=true or use_actual_heading:=false" >&2
+      exit 2
+      ;;
+  esac
+fi
+
+case "$USE_TRACKER" in
+  true)
+    EXTERNAL_DETECTION_NODE="tracker"
+    ;;
+  false)
+    ;;
+  *)
+    echo "Invalid tracker option: $USE_TRACKER" >&2
+    echo "Use tracker:=true or tracker:=false" >&2
+    exit 2
+    ;;
+esac
+
 if [ "$USE_ESTIMATE" = true ]; then
   LEADER_MODE="estimate"
 else
@@ -148,7 +197,11 @@ elif [[ "$WEIGHTS_REL" != /* ]] && [ ! -e "$WS_ROOT/models/$WEIGHTS_REL" ]; then
     fi
   else
     if [ "$USE_OBB" = true ]; then
-      WEIGHTS_REL="obb/${MODEL_SUBDIR:-yolo26}/$WEIGHTS_REL"
+      if [ -n "$MODEL_SUBDIR" ]; then
+        WEIGHTS_REL="obb/$MODEL_SUBDIR/$WEIGHTS_REL"
+      else
+        WEIGHTS_REL="obb/mymodels/$WEIGHTS_REL"
+      fi
     else
       if [ -n "$MODEL_SUBDIR" ]; then
         WEIGHTS_REL="detection/$MODEL_SUBDIR/$WEIGHTS_REL"
@@ -162,6 +215,11 @@ fi
 if [ "$USE_ESTIMATE" = true ]; then
   if [ "$HAVE_STARTUP_REPOSITION_ENABLE" != true ]; then
     EXTRA_ARGS+=("startup_reposition_enable:=true")
+  fi
+  if [ -z "$USE_ACTUAL_HEADING" ] && [ "$HAVE_LEADER_ACTUAL_HEADING_ENABLE" != true ]; then
+    EXTRA_ARGS+=("leader_actual_heading_enable:=true")
+  elif [ -n "$USE_ACTUAL_HEADING" ] && [ "$HAVE_LEADER_ACTUAL_HEADING_ENABLE" != true ]; then
+    EXTRA_ARGS+=("leader_actual_heading_enable:=$USE_ACTUAL_HEADING")
   fi
   if [ "$HAVE_UAV_START_X" != true ]; then
     EXTRA_ARGS+=("uav_start_x:=-7.0")
@@ -181,6 +239,8 @@ ros2 launch lrs_halmstad run_1to1_follow.launch.py \
   ugv_set_initial_pose:=true \
   leader_mode:="$LEADER_MODE" \
   start_leader_estimator:=true \
+  external_detection_enable:=true \
+  external_detection_node:="$EXTERNAL_DETECTION_NODE" \
   leader_range_mode:=ground \
   yolo_weights:="$WEIGHTS_REL" \
   "${EXTRA_ARGS[@]}" \

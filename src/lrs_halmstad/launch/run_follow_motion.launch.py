@@ -72,6 +72,22 @@ def _leader_nonodom_condition():
     )
 
 
+def _external_perception_condition(node_name: str):
+    enabled = LaunchConfiguration('external_detection_enable')
+    selected = LaunchConfiguration('external_detection_node')
+    return IfCondition(
+        PythonExpression([
+            "'",
+            enabled,
+            "'.lower() in ('1','true','yes','on') and '",
+            selected,
+            "'.lower() == '",
+            node_name.lower(),
+            "'",
+        ])
+    )
+
+
 def _default_world_value(world_sub, orchard_value: str, walls_value: str, warehouse_value: str, default_value: str = '0.0'):
     return PythonExpression([
         "'",
@@ -153,7 +169,7 @@ def generate_launch_description():
     params_file_arg = DeclareLaunchArgument(
         'params_file',
         default_value=params_default,
-        description='Parameter YAML for simulator, camera_tracker, leader_estimator, follow_uav, and ugv_nav2_driver',
+        description='Parameter YAML for simulator, leader_detector, leader_tracker, camera_tracker, leader_estimator, follow_uav, and ugv_nav2_driver',
     )
     world_arg = DeclareLaunchArgument('world', default_value='warehouse')
     uav_name_arg = DeclareLaunchArgument('uav_name', default_value='dji0')
@@ -165,7 +181,7 @@ def generate_launch_description():
         description="auto|true|false; auto starts estimator for pose/estimate, perception mode, or when yolo_weights is set",
     )
     startup_reposition_enable_arg = DeclareLaunchArgument('startup_reposition_enable', default_value='false')
-    follow_yaw_arg = DeclareLaunchArgument('follow_yaw', default_value='false')
+    follow_yaw_arg = DeclareLaunchArgument('follow_yaw', default_value='true')
     uav_start_x_arg = DeclareLaunchArgument(
         'uav_start_x',
         default_value='-2.0',
@@ -231,6 +247,28 @@ def generate_launch_description():
         'leader_actual_pose_enable',
         default_value='true',
     )
+    leader_actual_heading_enable_arg = DeclareLaunchArgument(
+        'leader_actual_heading_enable',
+        default_value='true',
+    )
+    leader_actual_heading_topic_arg = DeclareLaunchArgument(
+        'leader_actual_heading_topic',
+        default_value=LaunchConfiguration('leader_actual_pose_topic'),
+    )
+    external_detection_enable_arg = DeclareLaunchArgument(
+        'external_detection_enable',
+        default_value='false',
+        description='Start the external leader_detector node that publishes /coord/leader_detection',
+    )
+    external_detection_node_arg = DeclareLaunchArgument(
+        'external_detection_node',
+        default_value='detector',
+        description="Perception node to run when external_detection_enable:=true: detector|tracker",
+    )
+    external_detection_topic_arg = DeclareLaunchArgument(
+        'external_detection_topic',
+        default_value='/coord/leader_detection',
+    )
     leader_image_topic_arg = DeclareLaunchArgument('leader_image_topic', default_value=['/', LaunchConfiguration('uav_name'), '/camera0/image_raw'])
     leader_camera_info_topic_arg = DeclareLaunchArgument('leader_camera_info_topic', default_value=['/', LaunchConfiguration('uav_name'), '/camera0/camera_info'])
     leader_depth_topic_arg = DeclareLaunchArgument('leader_depth_topic', default_value='')
@@ -244,6 +282,7 @@ def generate_launch_description():
         default_value='',
     )
     yolo_device_arg = DeclareLaunchArgument('yolo_device', default_value='cpu')
+    tracker_config_arg = DeclareLaunchArgument('tracker_config', default_value='trackers/botsort.yaml')
     event_topic_arg = DeclareLaunchArgument('event_topic', default_value='/coord/events')
     ugv_start_delay_arg = DeclareLaunchArgument('ugv_start_delay_s', default_value='0.0')
 
@@ -270,6 +309,49 @@ def generate_launch_description():
         ],
     )
 
+    detector_node = Node(
+        package='lrs_halmstad',
+        executable='leader_detector',
+        name='leader_detector',
+        output='screen',
+        condition=_external_perception_condition('detector'),
+        parameters=[
+            LaunchConfiguration('params_file'),
+            {
+                'uav_name': LaunchConfiguration('uav_name'),
+                'camera_topic': LaunchConfiguration('leader_image_topic'),
+                'out_topic': LaunchConfiguration('external_detection_topic'),
+                'target_class_name': LaunchConfiguration('target_class_name'),
+                'target_class_id': LaunchConfiguration('target_class_id'),
+                'device': LaunchConfiguration('yolo_device'),
+                'yolo_weights': LaunchConfiguration('yolo_weights'),
+                'event_topic': LaunchConfiguration('event_topic'),
+            },
+        ],
+    )
+
+    tracker_node = Node(
+        package='lrs_halmstad',
+        executable='leader_tracker',
+        name='leader_tracker',
+        output='screen',
+        condition=_external_perception_condition('tracker'),
+        parameters=[
+            LaunchConfiguration('params_file'),
+            {
+                'uav_name': LaunchConfiguration('uav_name'),
+                'camera_topic': LaunchConfiguration('leader_image_topic'),
+                'out_topic': LaunchConfiguration('external_detection_topic'),
+                'target_class_name': LaunchConfiguration('target_class_name'),
+                'target_class_id': LaunchConfiguration('target_class_id'),
+                'device': LaunchConfiguration('yolo_device'),
+                'yolo_weights': LaunchConfiguration('yolo_weights'),
+                'tracker_config': LaunchConfiguration('tracker_config'),
+                'event_topic': LaunchConfiguration('event_topic'),
+            },
+        ],
+    )
+
     estimator_node = Node(
         package='lrs_halmstad',
         executable='leader_estimator',
@@ -288,10 +370,7 @@ def generate_launch_description():
                 'constant_range_m': LaunchConfiguration('leader_constant_range_m'),
                 'leader_actual_pose_topic': LaunchConfiguration('leader_actual_pose_topic'),
                 'leader_actual_pose_enable': _bool_param('leader_actual_pose_enable'),
-                'target_class_name': LaunchConfiguration('target_class_name'),
-                'target_class_id': LaunchConfiguration('target_class_id'),
-                'device': LaunchConfiguration('yolo_device'),
-                'yolo_weights': LaunchConfiguration('yolo_weights'),
+                'external_detection_topic': LaunchConfiguration('external_detection_topic'),
                 'event_topic': LaunchConfiguration('event_topic'),
             },
         ],
@@ -329,6 +408,8 @@ def generate_launch_description():
                 'uav_name': LaunchConfiguration('uav_name'),
                 'leader_input_type': LaunchConfiguration('leader_mode'),
                 'leader_pose_topic': LaunchConfiguration('leader_pose_topic'),
+                'leader_actual_heading_enable': _bool_param('leader_actual_heading_enable'),
+                'leader_actual_heading_topic': LaunchConfiguration('leader_actual_heading_topic'),
                 'z_alt': LaunchConfiguration('uav_start_z'),
                 'follow_yaw': _bool_param('follow_yaw'),
                 'startup_reposition_enable': _bool_param('startup_reposition_enable'),
@@ -430,6 +511,11 @@ def generate_launch_description():
         ugv_odom_topic_arg,
         leader_actual_pose_topic_arg,
         leader_actual_pose_enable_arg,
+        leader_actual_heading_enable_arg,
+        leader_actual_heading_topic_arg,
+        external_detection_enable_arg,
+        external_detection_node_arg,
+        external_detection_topic_arg,
         leader_image_topic_arg,
         leader_camera_info_topic_arg,
         leader_depth_topic_arg,
@@ -440,10 +526,13 @@ def generate_launch_description():
         target_class_id_arg,
         yolo_weights_arg,
         yolo_device_arg,
+        tracker_config_arg,
         event_topic_arg,
         ugv_start_delay_arg,
         simulator_node,
         ugv_amcl_to_odom_node,
+        detector_node,
+        tracker_node,
         estimator_node,
         follow_odom_node,
         follow_estimate_node,
