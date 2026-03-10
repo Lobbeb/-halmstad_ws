@@ -7,7 +7,7 @@ SIM_WORLD_FILE="$STATE_DIR/gazebo_sim.world"
 TMUX_STATE_DIR="$STATE_DIR/tmux_sessions"
 WORLD="warehouse"
 SESSION=""
-GROUP_GRACE_S=2
+GROUP_GRACE_S=5
 FINAL_GRACE_S=5
 KILL_SESSION=true
 DRY_RUN=false
@@ -39,7 +39,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [world] [session:=name] [group_grace_s:=2] [final_grace_s:=5] [kill_session:=true|false] [dry_run:=true|false]" >&2
+      echo "Usage: $0 [world] [session:=name] [group_grace_s:=5] [final_grace_s:=5] [kill_session:=true|false] [dry_run:=true|false]" >&2
       exit 2
       ;;
   esac
@@ -55,7 +55,7 @@ NAV2_PANE_ID=""
 FOLLOW_PANE_ID=""
 
 if [ -f "$SESSION_STATE_FILE" ]; then
-  # State file is written by run_tmux_1to1_follow.sh for robust shutdown targeting.
+  # State file is written by run_tmux_1to1.sh for robust shutdown targeting.
   # shellcheck disable=SC1090
   source "$SESSION_STATE_FILE"
 fi
@@ -209,7 +209,7 @@ if ! tmux_has_session; then
   exit 1
 fi
 
-echo "Stopping tmux 1-to-1 follow session: $SESSION"
+echo "Stopping tmux 1-to-1 session: $SESSION"
 
 for target in "${CTRL_C_GROUP[@]}"; do
   if send_ctrl_c "$target"; then

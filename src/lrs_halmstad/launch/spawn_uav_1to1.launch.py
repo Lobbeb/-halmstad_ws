@@ -44,7 +44,7 @@ def _default_uav_alt(world_sub, solar_farm_value: str, default_value: str):
 
 
 def generate_launch_description():
-    world_arg = DeclareLaunchArgument('world', default_value='orchard')
+    world_arg = DeclareLaunchArgument('world', default_value='warehouse')
     uav_name_arg = DeclareLaunchArgument('uav_name', default_value='dji0')
     uav_mode_arg = DeclareLaunchArgument('uav_mode', default_value='teleport')
     x_arg = DeclareLaunchArgument(

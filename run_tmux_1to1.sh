@@ -9,12 +9,14 @@ WORLD="warehouse"
 SESSION="halmstad-1to1"
 MAP_PATH=""
 GUI=""
-ATTACH=true
+TMUX_ATTACH=true
 DRY_RUN=false
 LAYOUT="panes"
+MODE="follow"
 BASE_DELAY_S=9
 BASE_DELAY_SET=false
-COMMON_ARGS=()
+SPAWN_ARGS=()
+FOLLOW_ARGS=()
 
 if [ "$#" -gt 0 ] && [[ "$1" != *":="* ]] && [[ "$1" != *=* ]]; then
   WORLD="$1"
@@ -33,14 +35,32 @@ for arg in "$@"; do
     gui:=*)
       GUI="${arg#gui:=}"
       ;;
-    attach:=*)
-      ATTACH="${arg#attach:=}"
+    tmux_attach:=*|attach:=*)
+      TMUX_ATTACH="${arg#*:=}"
       ;;
     dry_run:=*)
       DRY_RUN="${arg#dry_run:=}"
       ;;
     layout:=*)
       LAYOUT="${arg#layout:=}"
+      ;;
+    mode:=*|stack:=*)
+      MODE="${arg#*:=}"
+      ;;
+    yolo:=*)
+      case "${arg#yolo:=}" in
+        true|yes|1)
+          MODE="yolo"
+          ;;
+        false|no|0)
+          MODE="follow"
+          ;;
+        *)
+          echo "Invalid yolo option: ${arg#yolo:=}" >&2
+          echo "Use yolo:=true or yolo:=false" >&2
+          exit 2
+          ;;
+      esac
       ;;
     panes:=*)
       case "${arg#panes:=}" in
@@ -64,16 +84,48 @@ for arg in "$@"; do
     localization_delay_s:=*|nav2_delay_s:=*|follow_delay_s:=*)
       echo "Use delay_s:=... instead of per-step delay overrides." >&2
       ;;
+    camera_mode:=*|uav_camera_mode:=*)
+      echo "Use camera:=attached or camera:=detached with $0." >&2
+      exit 2
+      ;;
     camera:=*|height:=*|mount_pitch_deg:=*|uav_name:=*)
-      COMMON_ARGS+=("$arg")
+      SPAWN_ARGS+=("$arg")
+      FOLLOW_ARGS+=("$arg")
+      ;;
+    follow_yaw:=*|pan_enable:=*|use_tilt:=*|tilt_enable:=*|camera_default_tilt_deg:=*)
+      FOLLOW_ARGS+=("$arg")
+      ;;
+    weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*)
+      FOLLOW_ARGS+=("$arg")
       ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [world] [camera:=detached] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [map:=/path/map.yaml] [gui:=true|false] [delay_s:=9] [session:=name] [attach:=true|false] [dry_run:=true|false] [layout:=windows|panes]" >&2
+      echo "Usage: $0 [world] [mode:=follow|yolo] [camera:=detached|attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [obb:=true|false] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [delay_s:=9] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes]" >&2
       exit 2
       ;;
   esac
 done
+
+case "$MODE" in
+  follow|yolo)
+    ;;
+  *)
+    echo "Invalid mode: $MODE" >&2
+    echo "Use mode:=follow or mode:=yolo" >&2
+    exit 2
+    ;;
+esac
+
+if [ "$MODE" != "yolo" ]; then
+  for arg in "${FOLLOW_ARGS[@]}"; do
+    case "$arg" in
+      weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*)
+        echo "Argument '$arg' requires mode:=yolo" >&2
+        exit 2
+        ;;
+    esac
+  done
+fi
 
 if [ -z "$GUI" ]; then
   EFFECTIVE_GUI=true
@@ -111,9 +163,9 @@ apply_default_delays() {
   fi
 
   SPAWN_DELAY_S="$BASE_DELAY_S"
-  LOCALIZATION_DELAY_S=$((BASE_DELAY_S + 1))
+  LOCALIZATION_DELAY_S=$((BASE_DELAY_S + 2))
   NAV2_DELAY_S="$LOCALIZATION_DELAY_S"
-  FOLLOW_DELAY_S="$LOCALIZATION_DELAY_S"
+  FOLLOW_DELAY_S=$((LOCALIZATION_DELAY_S + 4))
 }
 
 shell_join() {
@@ -162,13 +214,17 @@ if [ -n "$GUI" ]; then
   GAZEBO_CMD+=("$GUI")
 fi
 
-SPAWN_CMD=(./run_spawn_uav.sh "$WORLD" "${COMMON_ARGS[@]}")
+SPAWN_CMD=(./run_spawn_uav.sh "$WORLD" "${SPAWN_ARGS[@]}")
 LOCALIZATION_CMD=(./run_localization.sh "$WORLD")
 if [ -n "$MAP_PATH" ]; then
   LOCALIZATION_CMD+=("$MAP_PATH")
 fi
 NAV2_CMD=(./run_nav2.sh)
-FOLLOW_CMD=(./run_1to1_follow.sh "$WORLD" "${COMMON_ARGS[@]}")
+if [ "$MODE" = "yolo" ]; then
+  FOLLOW_CMD=(./run_1to1_yolo.sh "$WORLD" "${FOLLOW_ARGS[@]}")
+else
+  FOLLOW_CMD=(./run_1to1_follow.sh "$WORLD" "${FOLLOW_ARGS[@]}")
+fi
 
 GAZEBO_LINE="$(build_line 0 false "${GAZEBO_CMD[@]}")"
 SPAWN_LINE="$(build_line "$SPAWN_DELAY_S" true "${SPAWN_CMD[@]}")"
@@ -184,6 +240,7 @@ fi
 
 if [ "$DRY_RUN" = true ]; then
   echo "Session: $SESSION"
+  echo "Mode: $MODE"
   echo "Layout: $LAYOUT"
   echo "GUI: $EFFECTIVE_GUI"
   echo "Base delay: $BASE_DELAY_S"
@@ -244,7 +301,7 @@ else
   tmux select-pane -t "$gazebo_pane"
 fi
 
-if [ "$ATTACH" = true ]; then
+if [ "$TMUX_ATTACH" = true ]; then
   exec tmux attach -t "$SESSION"
 fi
 

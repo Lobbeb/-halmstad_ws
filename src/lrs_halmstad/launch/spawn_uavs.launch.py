@@ -46,7 +46,7 @@ def _default_uav_alt(world_sub, solar_farm_value: str, default_value: str):
     ])
 
 
-world_arg = DeclareLaunchArgument('world', default_value='orchard',
+world_arg = DeclareLaunchArgument('world', default_value='warehouse',
                       description='Gazebo World')
 uav_mode_arg = DeclareLaunchArgument('uav_mode', default_value='teleport',
                       description='UAV mode: teleport (deterministic) or physics')

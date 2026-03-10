@@ -56,7 +56,7 @@ def generate_launch_description():
         description='UAV base name')
     world_arg = DeclareLaunchArgument(
         'world',
-        default_value='orchard',
+        default_value='warehouse',
         description='Gazebo World')
     x_arg = DeclareLaunchArgument(
         'x',

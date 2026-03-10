@@ -47,12 +47,12 @@ ARGUMENTS = [
     ),
     DeclareLaunchArgument(
         'world',
-        default_value='orchard',
+        default_value='warehouse',
         description='Gazebo World',
     ),
     DeclareLaunchArgument(
         'setup_path',
-        default_value=[EnvironmentVariable('HOME'), '/clearpath/'],
+        default_value=[EnvironmentVariable('HOME'), '/halmstad_ws/src/lrs_halmstad/clearpath/'],
         description='Clearpath setup path',
     ),
     DeclareLaunchArgument(

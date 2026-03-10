@@ -12,7 +12,7 @@ Current tested baseline:
 5. `./run_1to1_follow.sh warehouse`
 
 Recommended tmux workflow:
-- start the full stack with `./run_tmux_1to1_follow.sh warehouse`
+- start the full stack with `./run_tmux_1to1.sh warehouse`
 - current default tmux layout is panes:
   - row 1: `gazebo | spawn`
   - row 2: `localization | nav2`
@@ -20,7 +20,7 @@ Recommended tmux workflow:
 - current default delays:
   - `gui:=false` -> `spawn=9`, `localization/nav2/follow=10`
   - `gui:=true` -> `spawn=7`, `localization/nav2/follow=8`
-- stop the tmux-managed stack with `./stop_tmux_1to1_follow.sh warehouse`
+- stop the tmux-managed stack with `./stop_tmux_1to1.sh warehouse`
 
 Current important notes:
 - the 1-to-1 odom-follow path now uses AMCL-derived `/<ugv>/amcl_pose_odom`, not raw UGV odom
@@ -53,7 +53,7 @@ Recommended launch order (full simulation)
 ------------------------------------------
 1. Start Gazebo + Clearpath UGV (GUI):
 ```bash
-ros2 launch clearpath_gz simulation.launch.py world:=orchard use_sim_time:=true gui:=true
+ros2 launch clearpath_gz simulation.launch.py world:=warehouse use_sim_time:=true gui:=true
 ```
 
 2. Spawn UAV(s):
@@ -63,16 +63,13 @@ ros2 launch lrs_halmstad spawn1m100gimbal.launch.py
 ```
 - Multiple UAVs (`dji0`, `dji1`, `dji2`) with integrated cameras:
 ```bash
-ros2 launch lrs_halmstad spawn_uavs.launch.py world:=orchard uav_mode:=teleport
+ros2 launch lrs_halmstad spawn_uavs.launch.py world:=warehouse uav_mode:=teleport
 ```
 
-3. Start motion / follow logic (choose one):
+3. Start motion / follow logic:
 - Follow stack (UGV motion + UAV follow + optional YOLO leader estimate):
 ```bash
-ros2 launch lrs_halmstad run_round_follow_motion.launch.py
-```
-- Motion-only sequence (UAV sweep then UGV motion):
-```bash
+ros2 launch lrs_halmstad run_follow_motion.launch.py
 ```
 
 4. Start OMNeT pose bridge (TCP pose snapshots from ROS odom topics):
@@ -84,11 +81,11 @@ Gazebo + UGV simulation (GUI)
 -----------------------------
 Direct launch command:
 ```bash
-ros2 launch clearpath_gz simulation.launch.py world:=orchard use_sim_time:=true gui:=true
+ros2 launch clearpath_gz simulation.launch.py world:=warehouse use_sim_time:=true gui:=true
 ```
 
 Common arguments (when calling `clearpath_gz` directly):
-- `world:=orchard` (world name)
+- `world:=warehouse` (world name)
 - `use_sim_time:=true|false`
 - `gui:=true|false`
 
@@ -96,7 +93,7 @@ Spawn UAVs
 ----------
 Direct multi-UAV launch:
 ```bash
-ros2 launch lrs_halmstad spawn_uavs.launch.py world:=orchard uav_mode:=teleport
+ros2 launch lrs_halmstad spawn_uavs.launch.py world:=warehouse uav_mode:=teleport
 ```
 
 `spawn_uavs.launch.py` arguments:
@@ -106,11 +103,11 @@ ros2 launch lrs_halmstad spawn_uavs.launch.py world:=orchard uav_mode:=teleport
 Single UAV + camera/gimbal launch (integrated model)
 ----------------------------------------------------
 ```bash
-ros2 launch lrs_halmstad spawn1m100gimbal.launch.py world:=orchard name:=dji0
+ros2 launch lrs_halmstad spawn1m100gimbal.launch.py world:=warehouse name:=dji0
 ```
 
 `spawn1m100gimbal.launch.py` arguments:
-- `world:=<gazebo_world>` (default `orchard`)
+- `world:=<gazebo_world>` (default `warehouse`)
 - `name:=<uav_name>` (default `dji0`)
 
 Low-level UAV spawn (`spawn_robot.launch.py`)
@@ -120,7 +117,7 @@ Use this when you want one UAV with full control over camera attachment and spaw
 Example (teleport/static UAV with attached camera and camera bridge):
 ```bash
 ros2 launch lrs_halmstad spawn_robot.launch.py \
-  world:=orchard name:=dji0 type:=m100 \
+  world:=warehouse name:=dji0 type:=m100 \
   uav_mode:=teleport with_camera:=true bridge_camera:=true camera_name:=camera0 \
   x:=0.0 y:=0.0 z:=9.0 R:=0.0 P:=0.0 Y:=0.0
 ```
@@ -141,30 +138,30 @@ Movement and follow orchestration
 ---------------------------------
 Motion-only launch:
 ```bash
-  world:=orchard uav_name:=dji0 ugv_cmd_topic:=/a201_0000/cmd_vel
+  world:=warehouse uav_name:=dji0 ugv_cmd_topic:=/a201_0000/cmd_vel
 ```
 
-- `world:=<world>` (default `orchard`)
+- `world:=<world>` (default `warehouse`)
 - `uav_name:=<uav_name>` (default `dji0`)
 - `ugv_cmd_topic:=<topic>` (default `/a201_0000/cmd_vel`)
 - `uav_log_csv:=<path>` (default empty)
 
 Follow launch (UGV motion + `follow_uav` + optional `leader_estimator`):
 ```bash
-ros2 launch lrs_halmstad run_round_follow_motion.launch.py \
-  world:=orchard uav_name:=dji0 leader_mode:=odom
+ros2 launch lrs_halmstad run_follow_motion.launch.py \
+  world:=warehouse uav_name:=dji0 leader_mode:=odom
 ```
 
 YOLO estimate mode (UAV follows UGV estimate from camera detections):
 ```bash
-ros2 launch lrs_halmstad run_round_follow_motion.launch.py \
-  world:=orchard uav_name:=dji0 leader_mode:=estimate \
+ros2 launch lrs_halmstad run_follow_motion.launch.py \
+  world:=warehouse uav_name:=dji0 leader_mode:=estimate \
   yolo_weights:=detection/yolo5/yolov5n.pt yolo_device:=cpu
 ```
 
-`run_round_follow_motion.launch.py` arguments:
-- `params_file:=<yaml>` (default `config/run_round_follow_defaults.yaml`)
-- `world:=<world>` (default `orchard`)
+`run_follow_motion.launch.py` arguments:
+- `params_file:=<yaml>` (default `config/run_follow_defaults.yaml`)
+- `world:=<world>` (default `warehouse`)
 - `uav_name:=<uav_name>` (default `dji0`)
 - `leader_mode:=odom|pose|estimate` (default `odom`)
 - `leader_perception_enable:=true|false` (default `false`)

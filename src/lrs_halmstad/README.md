@@ -31,7 +31,7 @@ Reference for the current 1-to-1 Gazebo/ROS 2 workflow.
 
 ```bash
 cd ~/halmstad_ws
-./run_gazebo_sim.sh orchard
+./run_gazebo_sim.sh warehouse
 ```
 
 ### 2. Spawn one UAV
