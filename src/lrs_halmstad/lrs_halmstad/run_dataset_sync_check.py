@@ -2,13 +2,21 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
 
-DATASETS_ROOT = Path("/home/ruben/halmstad_ws/datasets")
+def _default_datasets_root() -> Path:
+    configured_root = os.environ.get("LRS_HALMSTAD_DATASETS_ROOT", "").strip()
+    if configured_root:
+        return Path(configured_root).expanduser().resolve()
+    return (Path(__file__).resolve().parents[3] / "datasets").resolve()
+
+
+DATASETS_ROOT = _default_datasets_root()
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 CATEGORY_EXTS = {
     "images": IMAGE_EXTS,
@@ -43,9 +51,10 @@ class DatasetReport:
 
 
 def parse_args() -> argparse.Namespace:
+    datasets_root = str(DATASETS_ROOT)
     parser = argparse.ArgumentParser(
         description=(
-            "Check a dataset under /home/ruben/halmstad_ws/datasets for missing or orphaned files "
+            f"Check a dataset under {datasets_root} for missing or orphaned files "
             "across images, labels, metadata, and overlay. When overlay/<split> exists, "
             "the kept set is the intersection of images/<split> and overlay/<split>."
         )
@@ -55,14 +64,14 @@ def parse_args() -> argparse.Namespace:
         nargs="?",
         default=None,
         help=(
-            "Dataset path, either absolute or relative to /home/ruben/halmstad_ws/datasets. "
-            "Examples: warehouse_v1/run1 or /home/ruben/halmstad_ws/datasets/warehouse_auto"
+            f"Dataset path, either absolute or relative to {datasets_root}. "
+            f"Examples: warehouse_v1/run1 or {datasets_root}/warehouse_auto"
         ),
     )
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Scan every dataset directory under /home/ruben/halmstad_ws/datasets that contains an images/ folder.",
+        help=f"Scan every dataset directory under {datasets_root} that contains an images/ folder.",
     )
     parser.add_argument(
         "--prune-orphans",

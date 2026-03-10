@@ -18,8 +18,8 @@ Recommended tmux workflow:
   - row 2: `localization | nav2`
   - row 3: `follow`
 - current default delays:
-  - `gui:=false` -> `spawn=9`, `localization/nav2/follow=10`
-  - `gui:=true` -> `spawn=7`, `localization/nav2/follow=8`
+  - `gui:=false` -> `spawn=9`, `localization/nav2=11`, `follow=13`
+  - `gui:=true` -> `spawn=7`, `localization/nav2=9`, `follow=11`
 - stop the tmux-managed stack with `./stop_tmux_1to1.sh warehouse`
 
 Current important notes:
@@ -36,7 +36,7 @@ This section documents the commands currently used to run the Halmstad Gazebo + 
 Terminal setup (run in every terminal or put in your .bashrc)
 --------------------------------------
 ```bash
-cd ~/halmstad_ws
+cd <workspace_root>
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 source src/lrs_halmstad/clearpath/setup.bash
@@ -172,7 +172,7 @@ ros2 launch lrs_halmstad run_follow_motion.launch.py \
 - `leader_camera_info_topic:=<topic>` (default `/<uav_name>/camera0/camera_info`)
 - `leader_depth_topic:=<topic>` (default empty / disabled)
 - `leader_uav_pose_topic:=<topic>` (default `/<uav_name>/pose_cmd`)
-- `yolo_weights:=<weights.pt>` (relative paths resolve under `/home/ruben/halmstad_ws/models`, for example `detection/yolo5/yolov5n.pt`)
+- `yolo_weights:=<weights.pt>` (relative paths resolve under `<workspace_root>/models`, for example `detection/yolo5/yolov5n.pt`)
 - `yolo_device:=cpu|cuda` (default `cpu`)
 - `event_topic:=<topic>` (default `/coord/events`)
 - `ugv_start_delay_s:=<seconds>` (default `0.0`; readiness gate handles startup)

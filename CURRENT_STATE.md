@@ -1,7 +1,7 @@
 ## Current State
 
 Assumption:
-- start in `~/halmstad_ws`
+- start in the workspace root
 
 ### Active Baseline
 
@@ -16,8 +16,8 @@ Current tmux default:
 - row 3: `follow`
 
 Current tmux default delays:
-- `gui:=false` -> `spawn=9s`, `localization/nav2/follow=10s`
-- `gui:=true` -> `spawn=7s`, `localization/nav2/follow=8s`
+- `gui:=false` -> `spawn=9s`, `localization/nav2=11s`, `follow=13s`
+- `gui:=true` -> `spawn=7s`, `localization/nav2=9s`, `follow=11s`
 
 Equivalent manual run order:
 1. `./run_gazebo_sim.sh warehouse`
@@ -68,7 +68,8 @@ Relevant files:
 `stop_tmux_1to1.sh`
 - recommended stop path
 - sends `Ctrl-C` to `follow`, `localization`, and `nav2` together
-- waits `2s`
+- waits `5s`
+- then stops `spawn`
 - then stops Gazebo
 - then kills the tmux session and does fallback cleanup for leftover ROS/Gazebo processes and stale `/tmp/halmstad_ws` state files
 

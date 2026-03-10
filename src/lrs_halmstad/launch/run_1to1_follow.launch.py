@@ -5,26 +5,6 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, Pyth
 from launch_ros.substitutions import FindPackageShare
 
 
-def _default_uav_coord(world_sub, solar_farm_value: str, default_value: str):
-    return PythonExpression([
-        "'",
-        solar_farm_value,
-        "' if '",
-        world_sub,
-        "' == 'solar_farm' else '",
-        default_value,
-        "'",
-    ])
-
-
-def _default_uav_start_x(world_sub, leader_mode_sub):
-    return PythonExpression([
-        "'-62.0' if '",
-        world_sub,
-        "' == 'solar_farm' else '-2.0'",
-    ])
-
-
 def _default_world_value(world_sub, orchard_value: str, walls_value: str, warehouse_value: str, default_value: str = '0.0'):
     return PythonExpression([
         "'",
@@ -66,11 +46,11 @@ def generate_launch_description():
     follow_yaw_arg = DeclareLaunchArgument('follow_yaw', default_value='false')
     uav_start_x_arg = DeclareLaunchArgument(
         'uav_start_x',
-        default_value=_default_uav_start_x(LaunchConfiguration('world'), LaunchConfiguration('leader_mode')),
+        default_value='-2.0',
     )
     uav_start_y_arg = DeclareLaunchArgument(
         'uav_start_y',
-        default_value=_default_uav_coord(LaunchConfiguration('world'), '8.0', '0.0'),
+        default_value='0.0',
     )
     uav_start_z_arg = DeclareLaunchArgument('uav_start_z', default_value='7.0')
     uav_start_yaw_deg_arg = DeclareLaunchArgument('uav_start_yaw_deg', default_value='0.0')

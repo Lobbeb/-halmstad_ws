@@ -208,10 +208,6 @@ class Simulator(Node):
         default_x = 0.0
         default_y = 0.0
         default_z = 7.0
-        if self.gz_world == "solar_farm":
-            default_x = -62.0
-            default_y = 8.0
-            default_z = 7.0
         match = re.match(r"^dji(\d+)$", uav_name)
         if match:
             index = int(match.group(1))

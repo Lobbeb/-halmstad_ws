@@ -15,6 +15,10 @@ LAYOUT="panes"
 MODE="follow"
 BASE_DELAY_S=9
 BASE_DELAY_SET=false
+SPAWN_DELAY_OVERRIDE=""
+LOCALIZATION_DELAY_OVERRIDE=""
+NAV2_DELAY_OVERRIDE=""
+FOLLOW_DELAY_OVERRIDE=""
 SPAWN_ARGS=()
 FOLLOW_ARGS=()
 
@@ -77,12 +81,21 @@ for arg in "$@"; do
           ;;
       esac
       ;;
-    delay_s:=*|spawn_delay_s:=*)
-      BASE_DELAY_S="${arg#*:=}"
+    delay_s:=*)
+      BASE_DELAY_S="${arg#delay_s:=}"
       BASE_DELAY_SET=true
       ;;
-    localization_delay_s:=*|nav2_delay_s:=*|follow_delay_s:=*)
-      echo "Use delay_s:=... instead of per-step delay overrides." >&2
+    spawn_delay_s:=*)
+      SPAWN_DELAY_OVERRIDE="${arg#spawn_delay_s:=}"
+      ;;
+    localization_delay_s:=*)
+      LOCALIZATION_DELAY_OVERRIDE="${arg#localization_delay_s:=}"
+      ;;
+    nav2_delay_s:=*)
+      NAV2_DELAY_OVERRIDE="${arg#nav2_delay_s:=}"
+      ;;
+    follow_delay_s:=*)
+      FOLLOW_DELAY_OVERRIDE="${arg#follow_delay_s:=}"
       ;;
     camera_mode:=*|uav_camera_mode:=*)
       echo "Use camera:=attached or camera:=detached with $0." >&2
@@ -100,7 +113,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [world] [mode:=follow|yolo] [camera:=detached|attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [obb:=true|false] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [delay_s:=9] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes]" >&2
+      echo "Usage: $0 [world] [mode:=follow|yolo] [camera:=detached|attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [obb:=true|false] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes]" >&2
       exit 2
       ;;
   esac
@@ -166,6 +179,11 @@ apply_default_delays() {
   LOCALIZATION_DELAY_S=$((BASE_DELAY_S + 2))
   NAV2_DELAY_S="$LOCALIZATION_DELAY_S"
   FOLLOW_DELAY_S=$((LOCALIZATION_DELAY_S + 4))
+
+  [ -n "$SPAWN_DELAY_OVERRIDE" ] && SPAWN_DELAY_S="$SPAWN_DELAY_OVERRIDE"
+  [ -n "$LOCALIZATION_DELAY_OVERRIDE" ] && LOCALIZATION_DELAY_S="$LOCALIZATION_DELAY_OVERRIDE"
+  [ -n "$NAV2_DELAY_OVERRIDE" ] && NAV2_DELAY_S="$NAV2_DELAY_OVERRIDE"
+  [ -n "$FOLLOW_DELAY_OVERRIDE" ] && FOLLOW_DELAY_S="$FOLLOW_DELAY_OVERRIDE"
 }
 
 shell_join() {
@@ -244,6 +262,7 @@ if [ "$DRY_RUN" = true ]; then
   echo "Layout: $LAYOUT"
   echo "GUI: $EFFECTIVE_GUI"
   echo "Base delay: $BASE_DELAY_S"
+  echo "Overrides: spawn=${SPAWN_DELAY_OVERRIDE:-default} localization=${LOCALIZATION_DELAY_OVERRIDE:-default} nav2=${NAV2_DELAY_OVERRIDE:-default} follow=${FOLLOW_DELAY_OVERRIDE:-default}"
   echo "Delays: spawn=$SPAWN_DELAY_S localization=$LOCALIZATION_DELAY_S nav2=$NAV2_DELAY_S follow=$FOLLOW_DELAY_S"
   echo "[gazebo]       $GAZEBO_LINE"
   echo "[spawn]        $SPAWN_LINE"

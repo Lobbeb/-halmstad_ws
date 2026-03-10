@@ -3,7 +3,7 @@
 Default tested path: `warehouse`.
 
 Assumption:
-- you already start in `~/halmstad_ws`
+- you already start in the workspace root
 
 Recommended tmux workflow:
 - start with `./run_tmux_1to1.sh warehouse`
@@ -89,6 +89,7 @@ Useful overrides:
 ```bash
 ./run_tmux_1to1.sh warehouse gui:=false
 ./run_tmux_1to1.sh warehouse delay_s:=9
+./run_tmux_1to1.sh warehouse spawn_delay_s:=12 follow_delay_s:=18
 ./run_tmux_1to1.sh warehouse layout:=windows
 ./run_tmux_1to1.sh warehouse mode:=yolo
 ./run_tmux_1to1.sh warehouse mode:=yolo follow_yaw:=false use_tilt:=false
@@ -104,6 +105,10 @@ Default delays depend on `gui:=true|false`:
 
 If your machine is slower, increase the delay args:
 - `delay_s:=...`
+- `spawn_delay_s:=...`
+- `localization_delay_s:=...`
+- `nav2_delay_s:=...`
+- `follow_delay_s:=...`
 
 If you want separate tmux windows instead of the default panes:
 
@@ -147,7 +152,7 @@ Useful stop overrides:
 
 Current baseline:
 - this odom-follow path now uses `/<ugv>/amcl_pose_odom`, not raw `/platform/odom`
-- `/<ugv>/amcl_pose_odom` is synthesized from `/<ugv>/amcl_pose` by [pose_cov_to_odom.py](/home/ruben/halmstad_ws/src/lrs_halmstad/lrs_halmstad/pose_cov_to_odom.py)
+- `/<ugv>/amcl_pose_odom` is synthesized from `/<ugv>/amcl_pose` by [pose_cov_to_odom.py](src/lrs_halmstad/lrs_halmstad/pose_cov_to_odom.py)
 - launch `leader_odom_topic` / `ugv_odom_topic` defaults are intentionally pointed at that AMCL-derived topic
 - current UAV camera mode is detached: `uav_camera_mode:=detached_model`
 - current camera defaults are `pan_enable: true` and `tilt_enable: true`
@@ -172,7 +177,7 @@ Important:
 - the wrapper alias also accepts `camera:=attached`
 
 Important runtime note:
-- Gazebo sim time is guarded through [clock_guard.py](/home/ruben/halmstad_ws/src/lrs_halmstad/lrs_halmstad/clock_guard.py)
+- Gazebo sim time is guarded through [clock_guard.py](src/lrs_halmstad/lrs_halmstad/clock_guard.py)
 - expected `/clock` publisher is `clock_guard`
 - if Gazebo is restarted or the world is reset, restart localization, Nav2, and follow
 
@@ -464,7 +469,7 @@ This topic is populated by default in the current YOLO path and is computed agai
 
 Available YOLO models:
 
-These can be passed to `weights:=...` as relative paths under `/home/ruben/halmstad_ws/models`.
+These can be passed to `weights:=...` as relative paths under `<workspace_root>/models`.
 
 Detection models:
 - `detection/yolo26/yolo26n.pt`

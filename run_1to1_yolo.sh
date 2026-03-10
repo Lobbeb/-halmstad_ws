@@ -164,11 +164,7 @@ if [ "$USE_ESTIMATE" = true ]; then
     EXTRA_ARGS+=("startup_reposition_enable:=true")
   fi
   if [ "$HAVE_UAV_START_X" != true ]; then
-    if [ "$WORLD" = "solar_farm" ]; then
-      EXTRA_ARGS+=("uav_start_x:=-67.0")
-    else
-      EXTRA_ARGS+=("uav_start_x:=-7.0")
-    fi
+    EXTRA_ARGS+=("uav_start_x:=-7.0")
   fi
   if [ "$HAVE_UAV_START_Z" != true ]; then
     EXTRA_ARGS+=("uav_start_z:=7.0")

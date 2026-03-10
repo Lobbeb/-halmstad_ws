@@ -6,9 +6,11 @@ import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Tuple
 
 import rclpy
+from ament_index_python.packages import get_package_share_path
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from rclpy.time import Time
@@ -58,6 +60,21 @@ class Detection2D:
     bbox: Tuple[float, float, float, float]
     cls_id: Optional[int] = None
     cls_name: str = ""
+
+
+def _default_models_root() -> str:
+    configured_root = os.environ.get("LRS_HALMSTAD_MODELS_ROOT", "").strip()
+    if configured_root:
+        return os.path.expanduser(configured_root)
+    try:
+        pkg_share = get_package_share_path("lrs_halmstad").resolve()
+        for parent in pkg_share.parents:
+            candidate = parent / "src" / "lrs_halmstad"
+            if candidate.is_dir():
+                return str(parent / "models")
+    except Exception:
+        pass
+    return str((Path(__file__).resolve().parents[3] / "models").resolve())
 
 
 def clamp01(x: float) -> float:
@@ -115,7 +132,7 @@ class LeaderEstimator(Node):
 
         # YOLO and detection config
         self.declare_parameter("yolo_weights", "")
-        self.declare_parameter("models_root", "~/halmstad_ws/models")
+        self.declare_parameter("models_root", _default_models_root())
         self.declare_parameter("yolo_backend", "ultralytics")  # auto|ultralytics|yolov5
         self.declare_parameter("yolov5_repo_path", "")
         self.declare_parameter("device", "cpu")
