@@ -55,6 +55,7 @@ class Detection2D:
     bbox: Tuple[float, float, float, float]
     cls_id: Optional[int] = None
     cls_name: str = ""
+    track_id: Optional[int] = None
 
 
 @dataclass
@@ -66,6 +67,7 @@ class DebugDet:
     conf: float
     cls_id: Optional[int]
     cls_name: str
+    track_id: Optional[int] = None
     rejected_reason: str = ""
 
 
@@ -146,6 +148,11 @@ class LeaderEstimator(Node):
         self.declare_parameter("proxy_switch_min_conf", 0.35, dyn_num)
         self.declare_parameter("proxy_switch_force_local", False)
         self.declare_parameter("proxy_use_geom_filters", False)
+        self.declare_parameter("proxy_track_enable", True)
+        self.declare_parameter("proxy_track_tracker", "botsort.yaml")
+        self.declare_parameter("proxy_track_persist", True)
+        self.declare_parameter("proxy_track_max_miss_frames", 20, dyn_num)
+        self.declare_parameter("proxy_track_active_id_bonus", 0.25, dyn_num)
         self.declare_parameter("proxy_lock_on_last_enable", True)
         self.declare_parameter("proxy_lock_max_px", 220.0, dyn_num)
         self.declare_parameter("proxy_lock_min_conf", 0.03, dyn_num)
@@ -248,6 +255,11 @@ class LeaderEstimator(Node):
         self.proxy_switch_min_conf = float(self.get_parameter("proxy_switch_min_conf").value)
         self.proxy_switch_force_local = bool(self.get_parameter("proxy_switch_force_local").value)
         self.proxy_use_geom_filters = bool(self.get_parameter("proxy_use_geom_filters").value)
+        self.proxy_track_enable = bool(self.get_parameter("proxy_track_enable").value)
+        self.proxy_track_tracker = str(self.get_parameter("proxy_track_tracker").value).strip()
+        self.proxy_track_persist = bool(self.get_parameter("proxy_track_persist").value)
+        self.proxy_track_max_miss_frames = int(self.get_parameter("proxy_track_max_miss_frames").value)
+        self.proxy_track_active_id_bonus = float(self.get_parameter("proxy_track_active_id_bonus").value)
         self.proxy_lock_on_last_enable = bool(self.get_parameter("proxy_lock_on_last_enable").value)
         self.proxy_lock_max_px = float(self.get_parameter("proxy_lock_max_px").value)
         self.proxy_lock_min_conf = float(self.get_parameter("proxy_lock_min_conf").value)
@@ -336,6 +348,10 @@ class LeaderEstimator(Node):
             raise ValueError("proxy_switch_max_px must be >= 0")
         if not (0.0 <= self.proxy_switch_min_conf <= 1.0):
             raise ValueError("proxy_switch_min_conf must be in [0,1]")
+        if self.proxy_track_max_miss_frames < 0:
+            raise ValueError("proxy_track_max_miss_frames must be >= 0")
+        if self.proxy_track_active_id_bonus < 0.0:
+            raise ValueError("proxy_track_active_id_bonus must be >= 0")
         if self.proxy_lock_max_px < 0.0:
             raise ValueError("proxy_lock_max_px must be >= 0")
         if not (0.0 <= self.proxy_lock_min_conf <= 1.0):
@@ -421,6 +437,7 @@ class LeaderEstimator(Node):
         self.last_det_center: Optional[Tuple[float, float]] = None
         self.last_det_cls_id: Optional[int] = None
         self.last_det_cls_name: str = ""
+        self.last_det_track_id: Optional[int] = None
         self.last_sel_visible: bool = False
         self.last_sel_changed: bool = False
         self.last_det_u: float = -1.0
@@ -437,6 +454,10 @@ class LeaderEstimator(Node):
         self.have_dynamic_tilt: bool = False
         self.last_marker_range_m: Optional[float] = None
         self.last_debug_dets: list[DebugDet] = []
+        self.proxy_track_id_active: Optional[int] = None
+        self.proxy_track_age: int = 0
+        self.proxy_track_frames_since_seen: int = 0
+        self.proxy_track_state: str = "NONE"
 
         self.track_x: float = 0.0
         self.track_y: float = 0.0
@@ -444,6 +465,8 @@ class LeaderEstimator(Node):
         self.track_vy: float = 0.0
         self.track_stamp: Optional[Time] = None
         self.track_valid: bool = False
+        self.proxy_infer_class_ids: Optional[list[int]] = None
+        self.proxy_infer_class_labels: list[str] = []
 
         self.yolo_model = None
         self.yolo_ready = False
@@ -496,6 +519,9 @@ class LeaderEstimator(Node):
             f"proxy_center_weight={self.proxy_center_weight}, proxy_center_max_px={self.proxy_center_max_px}, "
             f"proxy_switch_max_px={self.proxy_switch_max_px}, proxy_switch_min_conf={self.proxy_switch_min_conf}, "
             f"proxy_switch_force_local={self.proxy_switch_force_local}, proxy_use_geom_filters={self.proxy_use_geom_filters}, "
+            f"proxy_track_enable={self.proxy_track_enable}, proxy_track_tracker={self.proxy_track_tracker or '<default>'}, "
+            f"proxy_track_persist={self.proxy_track_persist}, proxy_track_max_miss_frames={self.proxy_track_max_miss_frames}, "
+            f"proxy_track_active_id_bonus={self.proxy_track_active_id_bonus}, "
             f"proxy_lock_on_last_enable={self.proxy_lock_on_last_enable}, proxy_lock_max_px={self.proxy_lock_max_px}, "
             f"proxy_lock_min_conf={self.proxy_lock_min_conf}, proxy_lock_dist_weight={self.proxy_lock_dist_weight}, "
             f"proxy_lock_class_bonus={self.proxy_lock_class_bonus}, "
@@ -530,9 +556,67 @@ class LeaderEstimator(Node):
             if isinstance(names, dict) and names:
                 preview = ", ".join([f"{k}:{v}" for k, v in sorted(names.items())[:8]])
                 self.get_logger().info(f"[leader_estimator] YOLO classes: {preview}")
+            self._refresh_proxy_infer_class_filter()
         except Exception as e:
             self.yolo_error = f"yolo_load_failed:{e}"
             self.get_logger().warn(f"[leader_estimator] Failed to load YOLO weights '{self.yolo_weights}': {e}")
+
+    def _refresh_proxy_infer_class_filter(self) -> None:
+        self.proxy_infer_class_ids = None
+        self.proxy_infer_class_labels = []
+        if not self.yolo_ready or self.yolo_model is None:
+            return
+        if self.target_mode != "proxy_coco":
+            return
+
+        requested_ids: list[int] = []
+        missing_names: list[str] = []
+        names = getattr(self.yolo_model, "names", None)
+        name_to_id: dict[str, int] = {}
+        id_to_name: dict[int, str] = {}
+        if isinstance(names, dict):
+            for k, v in names.items():
+                try:
+                    cid = int(k)
+                except Exception:
+                    continue
+                cname = str(v).strip().lower()
+                id_to_name[cid] = cname
+                if cname:
+                    name_to_id[cname] = cid
+
+        if self.target_coco_class_id >= 0:
+            requested_ids = [int(self.target_coco_class_id)]
+        elif self.target_coco_class_names:
+            for cname in self.target_coco_class_names:
+                cid = name_to_id.get(cname.lower())
+                if cid is None:
+                    missing_names.append(cname)
+                    continue
+                requested_ids.append(cid)
+        elif self.target_coco_class_name:
+            cid = name_to_id.get(self.target_coco_class_name.lower())
+            if cid is None:
+                missing_names.append(self.target_coco_class_name)
+            else:
+                requested_ids.append(cid)
+
+        requested_ids = sorted(set(requested_ids))
+        if requested_ids:
+            self.proxy_infer_class_ids = requested_ids
+            self.proxy_infer_class_labels = [f"{cid}:{id_to_name.get(cid, '?')}" for cid in requested_ids]
+            self.get_logger().info(
+                f"[leader_estimator] Proxy infer class filter ids={requested_ids} labels={self.proxy_infer_class_labels}"
+            )
+        elif self.target_coco_class_id >= 0 or self.target_coco_class_name or self.target_coco_class_names:
+            self.get_logger().warn(
+                "[leader_estimator] Proxy infer class filter unresolved from configured names/ids; "
+                "falling back to post-filter selection only"
+            )
+        if missing_names:
+            self.get_logger().warn(
+                f"[leader_estimator] Proxy class names not found in loaded YOLO classes: {sorted(set(missing_names))}"
+            )
 
     def emit_event(self, s: str) -> None:
         if not self.publish_events:
@@ -716,6 +800,8 @@ class LeaderEstimator(Node):
                 if self.debug_show_class_labels:
                     cls_txt = cand.cls_name if cand.cls_name else (str(cand.cls_id) if cand.cls_id is not None else "na")
                     txt = f"{cls_txt}:{cand.conf:.2f}"
+                    if cand.track_id is not None:
+                        txt = f"{txt}/id{cand.track_id}"
                     if cand.rejected_reason:
                         txt = f"{txt}/{cand.rejected_reason}"
                     text_y = max(12, by1 - 4)
@@ -733,6 +819,13 @@ class LeaderEstimator(Node):
             if cv2 is not None:
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 220, 0), 2)
                 cv2.circle(frame, (int(round(det.u)), int(round(det.v))), 3, (0, 220, 0), -1)
+                if self.debug_show_class_labels:
+                    cls_txt = det.cls_name if det.cls_name else (str(det.cls_id) if det.cls_id is not None else "na")
+                    txt = f"sel:{cls_txt}:{det.conf:.2f}"
+                    if det.track_id is not None:
+                        txt = f"{txt}/id{det.track_id}"
+                    text_y = min(h - 6, max(14, y2 + 14))
+                    cv2.putText(frame, txt, (x1, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
 
         label = f"{state} conf={self.last_det_conf:.2f} range={self.last_range_used_m:.1f}m src={self.last_range_source}"
         if extra:
@@ -815,7 +908,64 @@ class LeaderEstimator(Node):
             bbox=(x1, y1, x2, y2),
             cls_id=marker_id,
             cls_name=f"aruco_{marker_id}",
+            track_id=marker_id,
         )
+
+    def _parse_track_id(self, box_obj) -> Optional[int]:
+        raw_id = getattr(box_obj, "id", None)
+        if raw_id is None:
+            return None
+        try:
+            if hasattr(raw_id, "__len__") and len(raw_id) > 0:
+                raw_id = raw_id[0]
+            if hasattr(raw_id, "item"):
+                raw_id = raw_id.item()
+            return int(raw_id)
+        except Exception:
+            return None
+
+    def _run_yolo(self, img_bgr: np.ndarray, proxy_mode: bool):
+        if not self.yolo_ready or self.yolo_model is None:
+            return None
+
+        use_track = proxy_mode and self.proxy_track_enable
+        infer_classes = self.proxy_infer_class_ids if proxy_mode else None
+        if use_track:
+            kwargs = {
+                "source": img_bgr,
+                "verbose": False,
+                "conf": self.conf_threshold,
+                "iou": self.iou_threshold,
+                "imgsz": self.imgsz,
+                "device": self.device,
+                "persist": self.proxy_track_persist,
+            }
+            if infer_classes:
+                kwargs["classes"] = infer_classes
+            if self.proxy_track_tracker:
+                kwargs["tracker"] = self.proxy_track_tracker
+            try:
+                return self.yolo_model.track(**kwargs)
+            except Exception as e:
+                # Keep runtime alive even if tracker API/config fails.
+                self.get_logger().warn(f"[leader_estimator] YOLO track() failed, falling back to predict(): {e}")
+
+        try:
+            kwargs = {
+                "source": img_bgr,
+                "verbose": False,
+                "conf": self.conf_threshold,
+                "iou": self.iou_threshold,
+                "imgsz": self.imgsz,
+                "device": self.device,
+            }
+            if infer_classes:
+                kwargs["classes"] = infer_classes
+            return self.yolo_model.predict(**kwargs)
+        except Exception as e:
+            self.yolo_error = f"infer_failed:{e}"
+            self.get_logger().warn(f"[leader_estimator] YOLO inference failed: {e}")
+            return None
 
     def _pick_detection(self, img_bgr: np.ndarray) -> Optional[Detection2D]:
         self.last_debug_dets = []
@@ -834,25 +984,15 @@ class LeaderEstimator(Node):
                     conf=marker_det.conf,
                     cls_id=marker_det.cls_id,
                     cls_name=marker_det.cls_name or "marker",
+                    track_id=marker_det.track_id,
                     rejected_reason="",
                 )
             )
             return marker_det
         if not self.yolo_ready or self.yolo_model is None:
             return None
-        try:
-            results = self.yolo_model.predict(
-                source=img_bgr,
-                verbose=False,
-                conf=self.conf_threshold,
-                iou=self.iou_threshold,
-                imgsz=self.imgsz,
-                device=self.device,
-            )
-        except Exception as e:
-            self.yolo_error = f"infer_failed:{e}"
-            self.get_logger().warn(f"[leader_estimator] YOLO inference failed: {e}")
-            return None
+        proxy_mode = self.target_mode == "proxy_coco"
+        results = self._run_yolo(img_bgr, proxy_mode=proxy_mode)
         if not results:
             return None
 
@@ -863,7 +1003,6 @@ class LeaderEstimator(Node):
             return None
 
         names = getattr(result, "names", {}) or {}
-        proxy_mode = self.target_mode == "proxy_coco"
         apply_geom_filters = (not proxy_mode) or self.proxy_use_geom_filters
         effective_target_class_id = self.target_class_id
         effective_target_class_name = self.target_class_name.lower()
@@ -893,6 +1032,7 @@ class LeaderEstimator(Node):
                 conf = float(b.conf[0]) if getattr(b, "conf", None) is not None else 0.0
                 cls_id = int(b.cls[0]) if getattr(b, "cls", None) is not None else None
                 cls_name = str(names.get(cls_id, "")) if cls_id is not None else ""
+                track_id = self._parse_track_id(b)
             except Exception:
                 continue
             total_boxes += 1
@@ -939,12 +1079,21 @@ class LeaderEstimator(Node):
                     conf=conf,
                     cls_id=cls_id,
                     cls_name=cls_name,
+                    track_id=track_id,
                     rejected_reason=reject_reason,
                 )
             )
             if reject_reason:
                 continue
-            cand = Detection2D(u=u, v=v, conf=conf, bbox=(x1, y1, x2, y2), cls_id=cls_id, cls_name=cls_name)
+            cand = Detection2D(
+                u=u,
+                v=v,
+                conf=conf,
+                bbox=(x1, y1, x2, y2),
+                cls_id=cls_id,
+                cls_name=cls_name,
+                track_id=track_id,
+            )
             score = cand.conf
             if (not proxy_mode) and self.target_bottom_bias > 0.0 and img_h > 0:
                 score += self.target_bottom_bias * max(0.0, min(1.0, cand.v / float(img_h)))
@@ -968,10 +1117,31 @@ class LeaderEstimator(Node):
                     score += self.bbox_continuity_class_bonus
                 elif self.target_prefer_last_class and self.last_det_cls_id is not None:
                     score -= max(0.0, self.bbox_continuity_class_bonus)
+            if (
+                proxy_mode
+                and self.proxy_track_enable
+                and self.proxy_track_id_active is not None
+                and cand.track_id is not None
+            ):
+                if cand.track_id == self.proxy_track_id_active:
+                    score += self.proxy_track_active_id_bonus
+                else:
+                    score -= 0.5 * self.proxy_track_active_id_bonus
             valid_candidates.append(cand)
             if best is None or score > best_score:
                 best = cand
                 best_score = score
+
+        if (
+            best is not None
+            and proxy_mode
+            and self.proxy_track_enable
+            and self.proxy_track_id_active is not None
+            and valid_candidates
+        ):
+            same_id = [c for c in valid_candidates if c.track_id == self.proxy_track_id_active]
+            if same_id:
+                best = max(same_id, key=lambda c: c.conf)
 
         if (
             best is not None
@@ -1299,6 +1469,8 @@ class LeaderEstimator(Node):
         sel_class = self.last_det_cls_name if self.last_det_cls_name else (
             str(self.last_det_cls_id) if self.last_det_cls_id is not None else "na"
         )
+        sel_track_id = self.last_det_track_id if self.last_det_track_id is not None else -1
+        proxy_track_id = self.proxy_track_id_active if self.proxy_track_id_active is not None else -1
         return (
             f"state={state} last_img_age_ms={image_age_ms if math.isfinite(image_age_ms) else 'inf'} "
             f"last_img_recv_wall_age_ms={img_wall_age_ms:.1f} "
@@ -1309,13 +1481,42 @@ class LeaderEstimator(Node):
             f"pan_deg={self.dynamic_pan_deg:.1f} tilt_deg={(self.dynamic_tilt_deg if self.have_dynamic_tilt else math.degrees(self.cam_pitch_offset_rad)):.1f} "
             f"reject_reason={self.last_reject_reason} "
             f"sel_visible={1 if self.last_sel_visible else 0} sel_changed={1 if self.last_sel_changed else 0} "
-            f"sel_class={sel_class} det_u={self.last_det_u:.1f} det_v={self.last_det_v:.1f} "
+            f"sel_class={sel_class} sel_track_id={sel_track_id} det_u={self.last_det_u:.1f} det_v={self.last_det_v:.1f} "
             f"img_w={self.last_img_w} img_h={self.last_img_h} err_u_px={err_u_px:.1f} err_v_px={err_v_px:.1f} "
             f"boxes_total={self.last_total_boxes} boxes_reject_class={self.last_class_rejects} boxes_reject_geom={self.last_geom_rejects} "
+            f"proxy_track_id={proxy_track_id} proxy_track_state={self.proxy_track_state} "
+            f"proxy_track_age={self.proxy_track_age} proxy_track_frames_since_seen={self.proxy_track_frames_since_seen} "
             f"vel_x={self.track_vx:.2f} vel_y={self.track_vy:.2f} speed_mps={track_speed:.2f} "
             f"img_age_s={image_age_s if math.isfinite(image_age_s) else 'inf'} "
             f"uav_pose_age_s={pose_age:.2f} uav_pose_src={self.uav_pose_source}{suffix}"
         )
+
+    def _proxy_track_mark_seen(self, track_id: Optional[int]) -> None:
+        if track_id is None:
+            self.proxy_track_frames_since_seen = 0
+            self.proxy_track_state = "DETECTED"
+            return
+        if self.proxy_track_id_active == track_id:
+            self.proxy_track_age += 1
+        else:
+            self.proxy_track_id_active = track_id
+            self.proxy_track_age = 1
+        self.proxy_track_frames_since_seen = 0
+        self.proxy_track_state = "TRACKED"
+
+    def _proxy_track_mark_miss(self) -> None:
+        self.proxy_track_frames_since_seen += 1
+        if self.proxy_track_id_active is None:
+            self.proxy_track_state = "LOST"
+            return
+        self.proxy_track_state = "LOST"
+        if (
+            self.proxy_track_enable
+            and self.proxy_track_max_miss_frames >= 0
+            and self.proxy_track_frames_since_seen > self.proxy_track_max_miss_frames
+        ):
+            self.proxy_track_id_active = None
+            self.proxy_track_age = 0
 
     def _publish_held_estimate(self, now: Time) -> bool:
         if self.last_good_estimate is None:
@@ -1385,6 +1586,7 @@ class LeaderEstimator(Node):
         cam_ok = self.camera_model is not None
 
         if not cam_ok or not image_ok or not pose_ok:
+            self._proxy_track_mark_miss()
             reasons = []
             if not cam_ok:
                 reasons.append("no_camera_info")
@@ -1416,6 +1618,8 @@ class LeaderEstimator(Node):
         if img_bgr is None:
             self.last_sel_visible = False
             self.last_sel_changed = False
+            self.last_det_track_id = None
+            self._proxy_track_mark_miss()
             self.last_det_conf = -1.0
             self.last_latency_ms = -1.0
             self.last_range_source = "none"
@@ -1431,6 +1635,8 @@ class LeaderEstimator(Node):
         if det is None:
             self.last_sel_visible = False
             self.last_sel_changed = False
+            self.last_det_track_id = None
+            self._proxy_track_mark_miss()
             self.bad_det_streak += 1
             self.good_det_streak = 0
             if self.bad_det_streak >= self.bad_debounce_frames:
@@ -1462,6 +1668,8 @@ class LeaderEstimator(Node):
         if not sane:
             self.last_sel_visible = False
             self.last_sel_changed = False
+            self.last_det_track_id = None
+            self._proxy_track_mark_miss()
             self.bad_det_streak += 1
             self.good_det_streak = 0
             if self.bad_det_streak >= self.bad_debounce_frames:
@@ -1490,18 +1698,22 @@ class LeaderEstimator(Node):
         self.bad_det_streak = 0
         prev_det_center = self.last_det_center
         prev_cls_id = self.last_det_cls_id
+        prev_track_id = self.last_det_track_id
         self.last_sel_visible = True
         self.last_det_center = (det.u, det.v)
         self.last_det_cls_id = det.cls_id
         self.last_det_cls_name = det.cls_name
+        self.last_det_track_id = det.track_id
+        self._proxy_track_mark_seen(det.track_id)
         self.last_det_u = float(det.u)
         self.last_det_v = float(det.v)
         switch_dist_px = 0.0
         if prev_det_center is not None:
             switch_dist_px = math.hypot(det.u - prev_det_center[0], det.v - prev_det_center[1])
         cls_changed = prev_cls_id is not None and det.cls_id is not None and prev_cls_id != det.cls_id
+        track_changed = prev_track_id is not None and det.track_id is not None and prev_track_id != det.track_id
         jump_changed = self.proxy_switch_max_px > 0.0 and switch_dist_px > self.proxy_switch_max_px
-        self.last_sel_changed = bool(cls_changed or jump_changed)
+        self.last_sel_changed = bool(cls_changed or track_changed or jump_changed)
 
         self.last_reject_reason = "none"
         self.last_det_conf = float(det.conf)

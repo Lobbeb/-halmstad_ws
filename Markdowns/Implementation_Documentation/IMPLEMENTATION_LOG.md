@@ -1,5 +1,88 @@
 # IMPLEMENTATION LOG
 
+## 2026-03-07 - Ultralytics tracking integration for proxy stage (BoT-SORT path)
+
+### What changed
+Implemented tracker continuity in `leader_estimator` for proxy mode to reduce multi-box target jumping.
+
+1. `leader_estimator.py`
+- Added proxy tracking parameters:
+  - `proxy_track_enable`
+  - `proxy_track_tracker`
+  - `proxy_track_persist`
+  - `proxy_track_max_miss_frames`
+  - `proxy_track_active_id_bonus`
+- Added track-aware inference path:
+  - in proxy mode, node now tries `model.track(..., tracker=..., persist=...)`
+  - falls back to `model.predict(...)` if tracker call fails (runtime-safe fallback)
+- Extended detection/debug structures with `track_id`.
+- Added active track bookkeeping in estimator:
+  - `proxy_track_id_active`
+  - `proxy_track_state` (`TRACKED|LOST|DETECTED`)
+  - `proxy_track_age`
+  - `proxy_track_frames_since_seen`
+- Added track-ID-aware selection:
+  - score bonus for candidates matching active track id,
+  - hard preference for same-id candidate when available,
+  - keeps existing proxy center/continuity/switch guards.
+- Extended status line fields:
+  - `sel_track_id`
+  - `proxy_track_id`
+  - `proxy_track_state`
+  - `proxy_track_age`
+  - `proxy_track_frames_since_seen`
+- Debug image labels now include track id (`id<k>`) for candidates/selected box.
+
+2. Launch/config wiring
+- Added launch args + estimator parameter mapping in:
+  - `run_round_follow_motion.launch.py`
+- Added defaults in:
+  - `run_round_follow_defaults.yaml`
+  - `run_round_follow_observe_strict.yaml`
+
+### Why this change was needed
+Proxy detection was often present, but selection still collapsed when multiple allowed classes/boxes appeared in the frame.  
+Tracking continuity was required so camera/follow consume a stable target identity instead of frame-by-frame best-box switching.
+
+### Affected mode(s)
+- Mode 1 (set_pose): affected
+- Mode 2 (controller backend): affected
+
+### How to verify
+1. Static/build (completed):
+```bash
+cd ~/halmstad_ws
+python3 -m py_compile src/lrs_halmstad/lrs_halmstad/leader_estimator.py
+python3 -m py_compile src/lrs_halmstad/launch/run_round_follow_motion.launch.py
+python3 -m py_compile src/lrs_halmstad/lrs_halmstad/follow_uav.py
+source /opt/ros/jazzy/setup.bash
+colcon build --packages-select lrs_halmstad --symlink-install
+```
+
+2. Launch args visible (completed):
+```bash
+cd ~/halmstad_ws
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+ros2 launch lrs_halmstad run_round_follow_motion.launch.py --show-args | \
+  rg -e proxy_track_enable \
+     -e proxy_track_tracker \
+     -e proxy_track_persist \
+     -e proxy_track_max_miss_frames \
+     -e proxy_track_active_id_bonus
+```
+
+3. Runtime evidence:
+- `/coord/leader_estimate_status` should report stable `proxy_track_id` windows and fewer rapid `sel_changed=1` flips in clutter.
+- Debug image labels should include `id...` for proxy detections.
+
+### Files changed in this implementation block
+- `src/lrs_halmstad/lrs_halmstad/leader_estimator.py`
+- `src/lrs_halmstad/launch/run_round_follow_motion.launch.py`
+- `src/lrs_halmstad/config/run_round_follow_defaults.yaml`
+- `src/lrs_halmstad/config/run_round_follow_observe_strict.yaml`
+- `Markdowns/Implementation_Documentation/IMPLEMENTATION_LOG.md`
+
 ## 2026-03-06 - Vertical search overshoot guard (local tilt span in reacquire)
 
 ### What changed
@@ -2168,3 +2251,36 @@ Expected output:
 ### Files changed in this implementation block
 - `src/lrs_halmstad/lrs_halmstad/world_names.py` (new)
 - `src/lrs_halmstad/launch/run_round_follow_motion.launch.py` (controller-mode fail-fast on simulator exit)
+
+## 2026-03-07 - Proxy tracker runtime dependency + class-restricted track inference
+
+### What changed
+- Resolved proxy-tracking runtime failure:
+  - Terminal C warning: `YOLO track() failed ... No module named 'lap'`
+  - Installed `lap>=0.5.12` in runtime Python environment (`/usr/bin/python3`) using:
+    - `python3 -m pip install --user --break-system-packages 'lap>=0.5.12'`
+- Updated `leader_estimator.py` so proxy mode sends class filters directly into Ultralytics calls:
+  - `YOLO.track(..., classes=[...])`
+  - `YOLO.predict(..., classes=[...])`
+- Added startup resolution/logging of proxy class-name allowlist to YOLO class IDs:
+  - Logs resolved ids/labels when mapping succeeds
+  - Warns if configured class names are not present in loaded YOLO classes
+
+### Why
+- Without `lap`, Ultralytics `track()` falls back to plain `predict()`, which weakens continuity.
+- Filtering only after model inference still allows tracker assignment over unrelated COCO classes.
+- Passing `classes=[...]` at inference time constrains both detections and tracker associations to the proxy UGV class set.
+
+### Verification run now
+1. `python3 -m py_compile src/lrs_halmstad/lrs_halmstad/leader_estimator.py` -> pass
+2. `colcon build --packages-select lrs_halmstad --symlink-install` -> pass
+3. `ros2 launch lrs_halmstad run_round_follow_motion.launch.py --show-args` -> args include:
+   - `target_mode`
+   - `target_coco_class_names`
+   - `proxy_track_enable`
+   - `proxy_track_tracker`
+   - `proxy_track_persist`
+
+### Files changed in this implementation block
+- `src/lrs_halmstad/lrs_halmstad/leader_estimator.py`
+- `Markdowns/Implementation_Documentation/IMPLEMENTATION_LOG.md`

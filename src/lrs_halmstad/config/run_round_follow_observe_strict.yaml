@@ -34,6 +34,11 @@ leader_estimator:
     proxy_switch_min_conf: 0.35
     proxy_switch_force_local: true
     proxy_use_geom_filters: false
+    proxy_track_enable: true
+    proxy_track_tracker: botsort.yaml
+    proxy_track_persist: true
+    proxy_track_max_miss_frames: 24
+    proxy_track_active_id_bonus: 0.30
     proxy_lock_on_last_enable: true
     proxy_lock_max_px: 240.0
     proxy_lock_min_conf: 0.03

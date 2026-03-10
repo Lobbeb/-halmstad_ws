@@ -162,6 +162,31 @@ def generate_launch_description():
         default_value='false',
         description='Proxy mode: if true, apply standard geometry filters (off recommended for proxy retention).',
     )
+    proxy_track_enable_arg = DeclareLaunchArgument(
+        'proxy_track_enable',
+        default_value='true',
+        description='Enable Ultralytics track() continuity in proxy mode.',
+    )
+    proxy_track_tracker_arg = DeclareLaunchArgument(
+        'proxy_track_tracker',
+        default_value='botsort.yaml',
+        description='Ultralytics tracker config (botsort.yaml or bytetrack.yaml, or path to custom yaml).',
+    )
+    proxy_track_persist_arg = DeclareLaunchArgument(
+        'proxy_track_persist',
+        default_value='true',
+        description='Keep tracker state across frames in proxy mode.',
+    )
+    proxy_track_max_miss_frames_arg = DeclareLaunchArgument(
+        'proxy_track_max_miss_frames',
+        default_value='20',
+        description='Frames to keep active proxy track id before declaring hard loss.',
+    )
+    proxy_track_active_id_bonus_arg = DeclareLaunchArgument(
+        'proxy_track_active_id_bonus',
+        default_value='0.25',
+        description='Selection score bonus for candidates matching active proxy track id.',
+    )
     track_only_allow_reacquire_motion_arg = DeclareLaunchArgument(
         'track_only_allow_reacquire_motion',
         default_value='true',
@@ -417,6 +442,11 @@ def generate_launch_description():
                 'proxy_switch_min_conf': LaunchConfiguration('proxy_switch_min_conf'),
                 'proxy_switch_force_local': LaunchConfiguration('proxy_switch_force_local'),
                 'proxy_use_geom_filters': LaunchConfiguration('proxy_use_geom_filters'),
+                'proxy_track_enable': LaunchConfiguration('proxy_track_enable'),
+                'proxy_track_tracker': LaunchConfiguration('proxy_track_tracker'),
+                'proxy_track_persist': LaunchConfiguration('proxy_track_persist'),
+                'proxy_track_max_miss_frames': LaunchConfiguration('proxy_track_max_miss_frames'),
+                'proxy_track_active_id_bonus': LaunchConfiguration('proxy_track_active_id_bonus'),
                 'event_topic': LaunchConfiguration('event_topic'),
             },
         ],
@@ -611,6 +641,11 @@ def generate_launch_description():
         proxy_switch_min_conf_arg,
         proxy_switch_force_local_arg,
         proxy_use_geom_filters_arg,
+        proxy_track_enable_arg,
+        proxy_track_tracker_arg,
+        proxy_track_persist_arg,
+        proxy_track_max_miss_frames_arg,
+        proxy_track_active_id_bonus_arg,
         track_only_allow_reacquire_motion_arg,
         camera_pose_control_mode_arg,
         camera_pose_failover_failures_arg,
