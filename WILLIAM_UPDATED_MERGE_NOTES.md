@@ -2,6 +2,8 @@
 
 Updated: 2026-03-11
 
+This file is a record of what was ported into the current branch, not a pending-work checklist.
+
 ## Branch refs
 
 - Current working branch: `splitting_everything` at `4461e74`
