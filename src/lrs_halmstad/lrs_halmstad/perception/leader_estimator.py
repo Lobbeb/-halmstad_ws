@@ -15,11 +15,11 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import String
+from std_msgs.msg import Float32, String
 
 from lrs_halmstad.follow.follow_math import coerce_bool, quat_from_yaw, wrap_pi, yaw_from_quat
 from lrs_halmstad.perception.detection_protocol import Detection2D, decode_detection_payload
-from lrs_halmstad.perception.detection_status import overlay_lines_from_status
+from lrs_halmstad.perception.detection_status import parse_status_line
 from lrs_halmstad.perception.yolo_common import cv2, image_to_bgr, order_quad
 
 @dataclass
@@ -164,6 +164,9 @@ class LeaderEstimator(Node):
         self.last_external_det_stamp: Optional[Time] = None
         self.last_external_det_status_text: str = ""
         self.last_external_det_status_stamp: Optional[Time] = None
+        self.last_follow_debug_heading_yaw: Optional[float] = None
+        self.last_follow_debug_heading_source: str = ""
+        self.last_follow_debug_heading_stamp: Optional[Time] = None
         self.last_actual_leader_pose: Optional[Pose2D] = None
         self.last_actual_leader_pose_stamp: Optional[Time] = None
         self.last_estimate_pose: Optional[Pose2D] = None
@@ -197,6 +200,18 @@ class LeaderEstimator(Node):
             String,
             self.external_detection_status_topic,
             self.on_external_detection_status,
+            10,
+        )
+        self.follow_debug_heading_source_sub = self.create_subscription(
+            String,
+            f"/{self.uav_name}/follow/debug/leader_heading_source",
+            self.on_follow_debug_heading_source,
+            10,
+        )
+        self.follow_debug_heading_yaw_sub = self.create_subscription(
+            Float32,
+            f"/{self.uav_name}/follow/debug/leader_follow_yaw_rad",
+            self.on_follow_debug_heading_yaw,
             10,
         )
         self.actual_leader_pose_sub = (
@@ -362,6 +377,14 @@ class LeaderEstimator(Node):
     def on_external_detection_status(self, msg: String) -> None:
         self.last_external_det_status_text = str(msg.data)
         self.last_external_det_status_stamp = self.get_clock().now()
+
+    def on_follow_debug_heading_source(self, msg: String) -> None:
+        self.last_follow_debug_heading_source = str(msg.data).strip()
+        self.last_follow_debug_heading_stamp = self.get_clock().now()
+
+    def on_follow_debug_heading_yaw(self, msg: Float32) -> None:
+        self.last_follow_debug_heading_yaw = float(msg.data)
+        self.last_follow_debug_heading_stamp = self.get_clock().now()
 
     def _is_fresh(self, last_stamp: Optional[Time], timeout_s: float, now: Time) -> bool:
         if last_stamp is None:
@@ -676,12 +699,42 @@ class LeaderEstimator(Node):
             f"err_dx_m={err_dx} err_dy_m={err_dy} err_planar_m={err_planar}"
         )
 
-    def _detection_status_overlay_lines(self, now: Time) -> list[str]:
+    def _detection_status_fields(self, now: Time) -> dict[str, str]:
         if not self.last_external_det_status_text:
-            return ["det_state=na reason=status_missing"]
+            return {}
         if not self._is_fresh(self.last_external_det_status_stamp, self.external_detection_timeout_s, now):
-            return ["det_state=na reason=status_stale"]
-        return overlay_lines_from_status(self.last_external_det_status_text) or ["det_state=na reason=status_invalid"]
+            return {}
+        return parse_status_line(self.last_external_det_status_text)
+
+    def _resolved_debug_heading(self, now: Time) -> tuple[Optional[float], str]:
+        if (
+            self.last_follow_debug_heading_yaw is not None
+            and self._is_fresh(self.last_follow_debug_heading_stamp, self.external_detection_timeout_s, now)
+        ):
+            src = self.last_follow_debug_heading_source or "follow_debug"
+            return self.last_follow_debug_heading_yaw, src
+        if self.last_estimate_pose is not None:
+            return self.last_estimate_pose.yaw, self.last_heading_source or "estimate_pose"
+        return None, "none"
+
+    def _heading_direction_label(self, leader_pose: Optional[Pose2D], heading_yaw: Optional[float]) -> str:
+        if leader_pose is None or self.uav_pose is None or heading_yaw is None:
+            return "na"
+        away_from_uav_yaw = math.atan2(
+            leader_pose.y - self.uav_pose.y,
+            leader_pose.x - self.uav_pose.x,
+        )
+        delta = wrap_pi(heading_yaw - away_from_uav_yaw)
+        abs_delta = abs(delta)
+        straight_thresh = math.radians(45.0)
+        reverse_thresh = math.radians(135.0)
+        if abs_delta <= straight_thresh:
+            return "forward"
+        if abs_delta >= reverse_thresh:
+            return "reverse"
+        if delta > 0.0:
+            return "left"
+        return "right"
 
     def _bgr_to_image_msg(self, img_bgr: np.ndarray) -> Optional[Image]:
         if img_bgr.ndim != 3 or img_bgr.shape[2] != 3:
@@ -714,7 +767,35 @@ class LeaderEstimator(Node):
         err_planar = "na" if self.last_estimate_error_m is None else f"{self.last_estimate_error_m:.2f}"
         return f"err=({err_dx},{err_dy},{err_planar})"
 
-    def _publish_debug_image(self, state: str, det: Optional[Detection2D]) -> None:
+    def _draw_debug_text(
+        self,
+        img_bgr: np.ndarray,
+        text: str,
+        x: int,
+        y: int,
+        *,
+        align_right: bool = False,
+    ) -> None:
+        draw_x = int(x)
+        if align_right:
+            (text_w, _), _baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            draw_x = max(0, int(x) - int(text_w))
+        cv2.putText(img_bgr, text, (draw_x, int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 20, 20), 3, cv2.LINE_AA)
+        cv2.putText(img_bgr, text, (draw_x, int(y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+
+    def _draw_debug_field_row(
+        self,
+        img_bgr: np.ndarray,
+        fields: list[tuple[int, str]],
+        y: int,
+        *,
+        align_right: bool = False,
+    ) -> None:
+        for x, text in fields:
+            if text:
+                self._draw_debug_text(img_bgr, text, x, y, align_right=align_right)
+
+    def _publish_debug_image(self, state: str, reason: str, det: Optional[Detection2D]) -> None:
         if not self.publish_debug_image or self.debug_image_pub is None or self.last_image_msg is None:
             return
         img_bgr = self._image_to_bgr(self.last_image_msg)
@@ -723,6 +804,7 @@ class LeaderEstimator(Node):
         try:
             out = img_bgr.copy()
             if cv2 is not None:
+                now = self.get_clock().now()
                 color = self._debug_color(state)
                 if det is not None:
                     x1, y1, x2, y2 = det.bbox
@@ -731,20 +813,85 @@ class LeaderEstimator(Node):
                         pts = np.asarray(det.obb_corners, dtype=np.int32).reshape((-1, 1, 2))
                         cv2.polylines(out, [pts], True, (255, 255, 0), 2, cv2.LINE_AA)
                     cv2.circle(out, (int(round(det.u)), int(round(det.v))), 3, color, -1)
-                lines = [
-                    f"state={state} conf={self.last_det_conf:.2f} latency_ms={self.last_latency_ms:.1f}",
-                    f"est_range={self.last_range_used_m:.2f}m src={self.last_range_source} bearing={self.last_bearing_used_deg:.1f}deg",
-                    f"heading_src={self.last_heading_source}",
-                ]
-                lines.extend(self._detection_status_overlay_lines(self.get_clock().now()))
+                resolved_heading_yaw, resolved_heading_src = self._resolved_debug_heading(now)
+                resolved_heading_label = self._heading_direction_label(self.last_estimate_pose, resolved_heading_yaw)
+                det_fields = self._detection_status_fields(now)
+                det_src = det_fields.get("perception", "none")
+                det_id = det_fields.get("track_id", "none")
+                det_hits = det_fields.get("track_hits", "0")
+                det_age_raw = det_fields.get("track_age_s", "0.0")
+                try:
+                    det_age = f"{float(det_age_raw):.1f}s"
+                except Exception:
+                    det_age = f"{det_age_raw}s"
+
+                h, w = out.shape[:2]
+                est_col_1 = 8
+                est_col_2 = max(165, int(w * 0.27))
+                est_col_3 = max(305, int(w * 0.45))
+                det_col_1 = max(0, int(w * 0.67))
+                det_col_2 = max(0, int(w * 0.86))
+                det_col_3 = w - 8
+                y1 = 20
+                y2 = y1 + 18
+                y3 = y2 + 18
+                y4 = y3 + 18
+
+                self._draw_debug_field_row(
+                    out,
+                    [
+                        (est_col_1, f"est_range={self.last_range_used_m:.2f}m"),
+                        (est_col_2, f"src={self.last_range_source}"),
+                        (est_col_3, f"bearing={self.last_bearing_used_deg:.1f}deg"),
+                    ],
+                    y1,
+                )
+                self._draw_debug_field_row(
+                    out,
+                    [
+                        (est_col_1, f"est_heading={resolved_heading_label}"),
+                        (est_col_2, f"src={resolved_heading_src}"),
+                    ],
+                    y2,
+                )
                 if self.last_estimate_pose is not None:
-                    lines.append(f"est=({self.last_estimate_pose.x:.2f},{self.last_estimate_pose.y:.2f},{self.last_estimate_pose.yaw:.2f})")
-                    lines.append(self._estimate_error_line())
-                y = 20
-                for line in lines:
-                    cv2.putText(out, line, (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 20, 20), 3, cv2.LINE_AA)
-                    cv2.putText(out, line, (8, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                    y += 18
+                    self._draw_debug_text(
+                        out,
+                        f"est=({self.last_estimate_pose.x:.2f},{self.last_estimate_pose.y:.2f},{self.last_estimate_pose.yaw:.2f})",
+                        est_col_1,
+                        y3,
+                    )
+                    self._draw_debug_text(out, self._estimate_error_line(), est_col_1, y4)
+
+                self._draw_debug_field_row(
+                    out,
+                    [
+                        (det_col_1, f"state={state}"),
+                        (det_col_2, f"reason={reason}"),
+                        (det_col_3, f"conf={self.last_det_conf:.2f}"),
+                    ],
+                    y1,
+                    align_right=True,
+                )
+                self._draw_debug_field_row(
+                    out,
+                    [
+                        (det_col_3, f"src={det_src}"),
+                    ],
+                    y2,
+                    align_right=True,
+                )
+                self._draw_debug_field_row(
+                    out,
+                    [
+                        (det_col_1, f"id={det_id}"),
+                        (det_col_2, f"hits={det_hits}"),
+                        (det_col_3, f"age={det_age}"),
+                    ],
+                    y3,
+                    align_right=True,
+                )
+                self._draw_debug_text(out, f"latency_ms={self.last_latency_ms:.1f}", 8, h - 12)
             msg = self._bgr_to_image_msg(out)
             if msg is not None:
                 self.debug_image_pub.publish(msg)
@@ -766,7 +913,7 @@ class LeaderEstimator(Node):
             self.last_heading_source = "none"
             self.publish_status_msg(self._status_line("STALE", "camera_info_missing", now))
             self._record_fault("STALE", "camera_info_missing", now)
-            self._publish_debug_image("STALE", det)
+            self._publish_debug_image("STALE", "camera_info_missing", det)
             return
         if not self.image_fresh(now):
             self.last_det_conf = -1.0
@@ -775,7 +922,7 @@ class LeaderEstimator(Node):
             self.last_heading_source = "none"
             self.publish_status_msg(self._status_line("STALE", "image_stale", now))
             self._record_fault("STALE", "image_stale", now)
-            self._publish_debug_image("STALE", det)
+            self._publish_debug_image("STALE", "image_stale", det)
             return
         if not self.uav_pose_fresh(now):
             self.last_det_conf = -1.0
@@ -784,7 +931,7 @@ class LeaderEstimator(Node):
             self.last_heading_source = "none"
             self.publish_status_msg(self._status_line("STALE", "uav_pose_stale", now))
             self._record_fault("STALE", "uav_pose_stale", now)
-            self._publish_debug_image("STALE", det)
+            self._publish_debug_image("STALE", "uav_pose_stale", det)
             return
         if det is None:
             self.last_det_conf = -1.0
@@ -794,7 +941,7 @@ class LeaderEstimator(Node):
             reason = "no_detection" if self.last_external_det_stamp is not None else "detection_missing"
             self.publish_status_msg(self._status_line("NO_DET", reason, now))
             self._record_fault("NO_DET", reason, now)
-            self._publish_debug_image("NO_DET", None)
+            self._publish_debug_image("NO_DET", reason, None)
             return
 
         try:
@@ -804,21 +951,21 @@ class LeaderEstimator(Node):
             self.last_heading_source = "none"
             self.publish_status_msg(self._status_line("STALE", reason, now))
             self._record_fault("STALE", reason, now)
-            self._publish_debug_image("STALE", det)
+            self._publish_debug_image("STALE", reason, det)
             return
         except Exception as exc:
             reason = f"estimate_failed:{exc}"
             self.last_heading_source = "none"
             self.publish_status_msg(self._status_line("STALE", reason, now))
             self._record_fault("STALE", reason, now)
-            self._publish_debug_image("STALE", det)
+            self._publish_debug_image("STALE", reason, det)
             return
 
         self._publish_estimate(pose, now, det.track_id)
         self.publish_status_msg(self._status_line("OK", "none", now))
         self.last_debug_state = "OK"
         self.last_debug_det = det
-        self._publish_debug_image("OK", det)
+        self._publish_debug_image("OK", "none", det)
 
 
 def main(args=None):

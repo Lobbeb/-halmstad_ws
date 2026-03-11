@@ -51,23 +51,17 @@ def overlay_lines_from_status(line: str) -> list[str]:
     fields = parse_status_line(line)
     if not fields:
         return []
-    cls_name = fields.get("cls_name", "")
-    cls_id = fields.get("cls_id", "none")
-    cls_label = cls_name if cls_name else cls_id
+    age_raw = fields.get("track_age_s", "0.0")
+    try:
+        age_text = f"{float(age_raw):.1f}s"
+    except Exception:
+        age_text = f"{age_raw}s"
     return [
+        f"src={fields.get('perception', 'none')}",
         (
-            f"det_state={fields.get('state', 'na')} "
-            f"reason={fields.get('reason', 'none')} "
-            f"src={fields.get('perception', 'none')} "
-            f"conf={fields.get('conf', 'na')} "
-            f"cls={cls_label}"
-        ),
-        (
-            f"track_id={fields.get('track_id', 'none')} "
-            f"state={fields.get('track_state', 'na')} "
+            f"id={fields.get('track_id', 'none')} "
             f"hits={fields.get('track_hits', '0')} "
-            f"age_s={fields.get('track_age_s', '0.0')} "
-            f"switched={fields.get('track_switched', 'false')}"
+            f"age={age_text}"
         ),
     ]
 
