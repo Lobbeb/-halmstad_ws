@@ -111,9 +111,31 @@ TOPICS=(
   "/$UAV_NAME/pose"
   "/$UAV_NAME/pose_cmd"
   "/$UAV_NAME/pose_cmd/odom"
-  "/$UAV_NAME/camera/actual/center_pose"
-  "/$UAV_NAME/camera/target/center_pose"
+  "/$UAV_NAME/update_pan"
+  "/$UAV_NAME/update_tilt"
+  "/$UAV_NAME/camera0/actual/center_pose"
+  "/$UAV_NAME/camera0/target/center_pose"
+  "/$UAV_NAME/camera0/target_horizontal_distance_m"
+  "/$UAV_NAME/camera0/target_distance_3d_m"
+  "/$UAV_NAME/camera0/target_vertical_delta_m"
 )
+
+if [ "$MODE" = "follow" ]; then
+  TOPICS+=(
+    "/$UAV_NAME/follow/target/pan_deg"
+    "/$UAV_NAME/follow/target/tilt_deg"
+    "/$UAV_NAME/follow/actual/pan_deg"
+    "/$UAV_NAME/follow/actual/tilt_deg"
+    "/$UAV_NAME/follow/error/pan_deg"
+    "/$UAV_NAME/follow/error/tilt_deg"
+    "/$UAV_NAME/follow/target/d_target_m"
+    "/$UAV_NAME/follow/target/xy_target_m"
+    "/$UAV_NAME/follow/actual/xy_distance_m"
+    "/$UAV_NAME/follow/actual/distance_3d_m"
+    "/$UAV_NAME/follow/error/xy_distance_m"
+    "/$UAV_NAME/follow/error/anchor_distance_m"
+  )
+fi
 
 if [ "$MODE" = "yolo" ]; then
   TOPICS+=(
@@ -121,6 +143,12 @@ if [ "$MODE" = "yolo" ]; then
     "/coord/leader_distance_debug"
     "/coord/leader_estimate_status"
     "/coord/leader_estimate_error"
+    "/$UAV_NAME/follow/target/pan_deg"
+    "/$UAV_NAME/follow/target/tilt_deg"
+    "/$UAV_NAME/follow/actual/pan_deg"
+    "/$UAV_NAME/follow/actual/tilt_deg"
+    "/$UAV_NAME/follow/error/pan_deg"
+    "/$UAV_NAME/follow/error/tilt_deg"
     "/$UAV_NAME/follow/target/d_target_m"
     "/$UAV_NAME/follow/target/xy_target_m"
     "/$UAV_NAME/follow/actual/xy_distance_m"

@@ -109,11 +109,28 @@
     <xacro:if value="$(arg with_camera)">
 
         <xacro:property name="camera_prefix" value="/${base_name}/$(arg camera_name)"/>
+        <xacro:property name="camera_yaw_link_name" value="$(arg camera_name)_yaw_link"/>
         <xacro:property name="camera_link_name" value="$(arg camera_name)_link"/>
+
+        <link name="${camera_yaw_link_name}">
+            <pose rotation_format="euler_rpy" degrees="true">0 0 0 0 0 0</pose>
+            <gravity>false</gravity>
+            <inertial>
+                <mass>0.01</mass>
+                <inertia>
+                    <ixx>1.0e-4</ixx>
+                    <ixy>0.0</ixy>
+                    <ixz>0.0</ixz>
+                    <iyy>1.0e-4</iyy>
+                    <iyz>0.0</iyz>
+                    <izz>1.0e-4</izz>
+                </inertia>
+            </inertial>
+        </link>
 
         <xacro:include filename="$(find lrs_halmstad)/xacro/lrs_camera_gimbal.sdf.xacro"/>
         <xacro:lrs_camera_gimbal name="$(arg camera_name)"
-                                 parent_link="$(arg base_link_frame)"
+                                 parent_link="${camera_yaw_link_name}"
                                  link_name="${camera_link_name}"
                                  hfov_deg="$(arg camera_hfov)"
                                  topic_base="${camera_prefix}"
@@ -129,14 +146,34 @@
                                  yaw_offset="$(arg camera_yaw_offset)"
                                  robot_type="$(arg robot_type)"
                                  robot_name="$(arg name)"
+                                 kinematic="false"
                                  im_format="R8G8B8"
 
 />
 
-        <joint type="revolute" name="$(arg name)_gimbal_joint">
+        <joint type="revolute" name="$(arg name)_gimbal_yaw_joint">
+          <pose>0 0 0 0 0 0</pose>
+          <child>${camera_yaw_link_name}</child>
+          <parent>$(arg base_link_frame)</parent>
+          <axis>
+            <xyz>0 0 1</xyz>
+            <limit>
+              <lower>-3.1416</lower>
+              <upper>3.1416</upper>
+              <effort>100</effort>
+              <velocity>-1</velocity>
+            </limit>
+            <dynamics>
+              <damping>0.1</damping>
+            </dynamics>
+            <use_parent_model_frame>1</use_parent_model_frame>
+          </axis>
+        </joint>
+
+        <joint type="revolute" name="$(arg name)_gimbal_pitch_joint">
           <pose>0 0 0 0 0 0</pose>
           <child>${camera_link_name}</child>
-          <parent>$(arg base_link_frame)</parent>
+          <parent>${camera_yaw_link_name}</parent>
           <axis>
             <xyz>0 -1 0</xyz>
             <limit>
@@ -153,12 +190,21 @@
         </joint>
 
     <plugin
-      filename="ignition-gazebo-joint-position-controller-system"
-      name="ignition::gazebo::systems::JointPositionController">
+      filename="gz-sim-joint-position-controller-system"
+      name="gz::sim::systems::JointPositionController">
       <use_velocity_commands>true</use_velocity_commands>
       <joint_index>0</joint_index>
-      <joint_name>$(arg name)_gimbal_joint</joint_name>
+      <joint_name>$(arg name)_gimbal_pitch_joint</joint_name>
       <topic>/model/$(arg name)/joint/$(arg name)_gimbal_joint/pitch/cmd_pos</topic>
+    </plugin>
+
+    <plugin
+      filename="gz-sim-joint-position-controller-system"
+      name="gz::sim::systems::JointPositionController">
+      <use_velocity_commands>true</use_velocity_commands>
+      <joint_index>0</joint_index>
+      <joint_name>$(arg name)_gimbal_yaw_joint</joint_name>
+      <topic>/model/$(arg name)/joint/$(arg name)_gimbal_joint/yaw/cmd_pos</topic>
     </plugin>
         
     </xacro:if>

@@ -164,10 +164,7 @@ class FollowUavOdom(FollowControllerCoreMixin, Node):
         self.last_uav_actual_time: Optional[Time] = None
         self.last_debug_actual_yaw_unwrapped: Optional[float] = None
 
-        self.current_leader_distance_xy_m = max(
-            0.01,
-            math.hypot(self.xy_target - self.camera_x_offset_m, self.camera_y_offset_m),
-        )
+        self.current_leader_distance_xy_m = max(0.01, self.xy_target)
         self.current_leader_distance_3d_m = math.hypot(self.current_leader_distance_xy_m, self.uav_start_z)
         self.last_cmd_time: Optional[Time] = None
 
@@ -417,8 +414,9 @@ class FollowUavOdom(FollowControllerCoreMixin, Node):
 
     def _current_follow_geometry(self):
         current_uav = self._current_uav_pose()
-        camera_x, camera_y = self._camera_xy_from_uav_pose(current_uav.x, current_uav.y, current_uav.yaw)
-        horizontal_distance = math.hypot(self.ugv_pose.x - camera_x, self.ugv_pose.y - camera_y)
+        # Body-motion geometry is defined from the UAV body pose to the leader pose.
+        # Camera-relative geometry stays in camera_tracker.py.
+        horizontal_distance = math.hypot(self.ugv_pose.x - current_uav.x, self.ugv_pose.y - current_uav.y)
         horizontal_distance = max(horizontal_distance, 1e-3)
         distance_3d = math.hypot(horizontal_distance, self._current_uav_z() - self.ugv_z)
         self.current_leader_distance_xy_m = horizontal_distance

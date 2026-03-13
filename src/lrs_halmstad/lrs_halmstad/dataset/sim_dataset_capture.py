@@ -103,7 +103,7 @@ class SimDatasetCapture(Node):
         self.camera_info_topic = str(self.get_parameter("camera_info_topic").value) or f"/{self.uav_name}/camera0/camera_info"
         self.camera_pose_topic = (
             str(self.get_parameter("camera_pose_topic").value)
-            or f"/{self.uav_name}/camera/actual/center_pose"
+            or f"/{self.uav_name}/camera0/actual/center_pose"
         )
         self.target_pose_topic = str(self.get_parameter("target_pose_topic").value)
         self.output_dir = os.path.abspath(os.path.expanduser(str(self.get_parameter("output_dir").value)))

@@ -4,7 +4,7 @@ Assumption:
 - start in the workspace root
 - wrapper files now live under `scripts/`
 - user-facing entrypoints are `./run.sh <name>` and `./stop.sh <name>`
-- recorded experiment bags live under `bags/experiments/`, and `./run.sh monitor_bag ...` replays them with automatic `ros2 topic echo` subscribers for the topics you pass
+- recorded experiment bags live under `bags/experiments/`, and `./run.sh bag_monitor ...` replays them with automatic topic monitoring for the topics you pass; short bag tokens like `const_test` / `depth_test` resolve to the latest matching run, calling it with only a bag prints `ros2 bag info` plus the saved topic list, interactive playback renders topics as a block dashboard instead of raw scrolling echo output, `leader_...` string topics are reformatted into fixed-width key/value columns, and `leader_distance_debug` now includes `range_m` plus signed distance deltas (`err_d_m`, `err_xy_m`) with a dedicated stable row layout
 
 ### Active Baseline
 
@@ -149,6 +149,10 @@ Clearpath path:
   - `src/lrs_halmstad/clearpath`
 - the old `/home/ruben/clearpath` path is no longer the active runtime path
 
+Warehouse file-waypoint behavior:
+- when `ugv_nav2_driver` loads `config/warehouse_waypoints.yaml`, it now constrains the first randomizable waypoint to one that lies forward of the current UGV heading when such a candidate exists
+- after that first goal, the rest of the file-waypoint order keeps the existing random rotation / tail-reversal behavior
+
 ### Perception Split
 
 This is the biggest structural change from earlier in the project.
@@ -272,13 +276,13 @@ Camera side:
   - publishes:
     - `/<uav>/update_pan`
     - `/<uav>/update_tilt`
-    - optional `/<uav>/camera/target/*` debug topics
+    - optional `/<uav>/camera0/{target,debug}/*` topics
 
 Simulator side:
 - `uav_simulator`
   - consumes `/<uav>/psdk_ros2/flight_control_setpoint_ENUposition_yaw`
   - consumes `/<uav>/update_pan` and `/<uav>/update_tilt`
-  - publishes `/<uav>/pose` and follow/camera debug topics
+  - publishes `/<uav>/pose`, `/<uav>/camera0/{actual,error}/*`, and follow debug topics
 
 ### Current Active Debug Target
 

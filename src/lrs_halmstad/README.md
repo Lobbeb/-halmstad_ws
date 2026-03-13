@@ -86,6 +86,8 @@ Important launch-default nuance:
 
 For `ugv_mode:=nav2`, start Clearpath localization and Nav2 separately first. The follow launch will then drive the Husky through `/a201_0000/navigate_to_pose` using the configured waypoint route.
 
+For file-based waypoint routes such as `config/warehouse_waypoints.yaml`, the Nav2 UGV driver now constrains the first selected waypoint to one that lies forward of the current UGV heading when possible, so the route does not start with an immediate backward segment. After that initial choice, the remaining file-waypoint order keeps the usual randomization behavior.
+
 If you want to test Nav2 goals from a separate node, use `ugv_mode:=external` in the follow launch so it does not also start its own UGV driver.
 
 The Nav2 UGV driver now also auto-publishes `/a201_0000/initialpose` before sending goals. The `ugv_initial_pose_*` values are in the saved map frame, not Gazebo world coordinates.

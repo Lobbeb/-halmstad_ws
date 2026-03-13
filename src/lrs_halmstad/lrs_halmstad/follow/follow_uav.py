@@ -189,13 +189,10 @@ class FollowUav(FollowControllerCoreMixin, Node):
         self.estimate_heading_min_speed_mps = float(required_param_value(self, "estimate_heading_min_speed_mps"))
         self.estimate_heading_max_dt_s = float(required_param_value(self, "estimate_heading_max_dt_s"))
         self._refresh_xy_target()
-        self.current_leader_distance_xy_m = max(
-            0.01,
-            math.hypot(self.xy_target - self.camera_x_offset_m, self.camera_y_offset_m),
-        )
+        self.current_leader_distance_xy_m = max(0.01, self.xy_target)
         self.current_leader_distance_3d_m = math.hypot(
             self.current_leader_distance_xy_m,
-            max(0.0, self.uav_start_z - self.camera_z_offset_m),
+            max(0.0, self.uav_start_z),
         )
         self.ugv_z = 0.0
         self.uav_actual_z = self.uav_start_z
@@ -992,18 +989,13 @@ class FollowUav(FollowControllerCoreMixin, Node):
         current_uav = self._current_uav_pose()
         uav_x = current_uav.x
         uav_y = current_uav.y
-        camera_x, camera_y = self._camera_xy_from_uav_pose(uav_x, uav_y, current_uav.yaw)
         uav_z = self._current_uav_z()
 
-        horizontal_distance = math.hypot(leader_x - camera_x, leader_y - camera_y)
+        # Body-motion geometry is defined from the UAV body pose to the leader pose.
+        # Camera-relative geometry stays in camera_tracker.py.
+        horizontal_distance = math.hypot(leader_x - uav_x, leader_y - uav_y)
         if horizontal_distance < 1e-3:
-            horizontal_distance = max(
-                0.01,
-                math.hypot(
-                    self._nominal_horizontal_follow_distance() - self.camera_x_offset_m,
-                    self.camera_y_offset_m,
-                ),
-            )
+            horizontal_distance = max(0.01, self._nominal_horizontal_follow_distance())
         distance_3d = math.hypot(horizontal_distance, uav_z - leader_z)
 
         self.current_leader_distance_xy_m = horizontal_distance

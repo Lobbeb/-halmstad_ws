@@ -112,11 +112,11 @@ class Simulator(Node):
         follow_target_pan_topic = self._uav_topic("follow/target/pan_deg")
         follow_actual_pan_topic = self._uav_topic("follow/actual/pan_deg")
         follow_error_pan_topic = self._uav_topic("follow/error/pan_deg")
-        camera_target_pose_topic = self._uav_topic("camera/target/center_pose")
-        camera_actual_pose_topic = self._uav_topic("camera/actual/center_pose")
-        camera_target_world_yaw_topic = self._uav_topic("camera/target/world_yaw_rad")
-        camera_actual_world_yaw_topic = self._uav_topic("camera/actual/world_yaw_rad")
-        camera_error_world_yaw_topic = self._uav_topic("camera/error/world_yaw_rad")
+        camera_target_pose_topic = self._camera_topic("target/center_pose")
+        camera_actual_pose_topic = self._camera_topic("actual/center_pose")
+        camera_target_world_yaw_topic = self._camera_topic("target/world_yaw_rad")
+        camera_actual_world_yaw_topic = self._camera_topic("actual/world_yaw_rad")
+        camera_error_world_yaw_topic = self._camera_topic("error/world_yaw_rad")
 
         self.pose_pub = self.create_publisher(PoseStamped, pose_topic, 10, callback_group=self.group)
         self.camera_pose_pub = (
@@ -198,6 +198,9 @@ class Simulator(Node):
 
     def _uav_topic(self, suffix: str) -> str:
         return f"/{self.uav_name}/{suffix.lstrip('/')}"
+
+    def _camera_topic(self, suffix: str) -> str:
+        return f"/{self.uav_name}/{self.camera_name}/{suffix.lstrip('/')}"
 
     def _gimbal_topic(self, axis: str) -> str:
         return f"/model/{self.uav_name}/joint/{self.uav_name}_gimbal_joint/{axis}/cmd_pos"
@@ -321,29 +324,20 @@ class Simulator(Node):
             yaw_debug.vector.z = float(wrap_pi(pose_yaw - self.yaw))
             if self.yaw_debug_pub is not None:
                 self.yaw_debug_pub.publish(yaw_debug)
-            if self.camera_mode == "detached_model":
-                actual_camera_yaw, _, _, _ = self._camera_pose_components(self.pan, self.tilt)
-                camera_pose = self._camera_pose_msg(now_msg, x, y, z, self.pan, self.tilt)
-                if self.camera_pose_pub is not None:
-                    self.camera_pose_pub.publish(camera_pose)
-                self.camera_actual_pose_pub.publish(camera_pose)
-                actual_camera_yaw_msg = Float32()
-                actual_camera_yaw_msg.data = float(actual_camera_yaw)
-                self.camera_actual_world_yaw_pub.publish(actual_camera_yaw_msg)
-                if self.target_camera_world_yaw is not None:
-                    camera_yaw_error_msg = Float32()
-                    camera_yaw_error_msg.data = float(wrap_pi(actual_camera_yaw - self.target_camera_world_yaw))
-                    self.camera_error_world_yaw_pub.publish(camera_yaw_error_msg)
-            else:
-                actual_camera_yaw_msg = Float32()
-                actual_camera_yaw_msg.data = float(self.yaw)
-                self.camera_actual_world_yaw_pub.publish(actual_camera_yaw_msg)
-                if self.target_camera_world_yaw is not None:
-                    camera_yaw_error_msg = Float32()
-                    camera_yaw_error_msg.data = float(wrap_pi(self.yaw - self.target_camera_world_yaw))
-                    self.camera_error_world_yaw_pub.publish(camera_yaw_error_msg)
             target_tilt_deg = self._absolute_camera_tilt_deg(self.target_tilt)
             actual_tilt_deg = self._absolute_camera_tilt_deg(self.tilt)
+            actual_camera_yaw, _, _, _ = self._camera_pose_components(self.pan, actual_tilt_deg)
+            camera_pose = self._camera_pose_msg(now_msg, x, y, z, self.pan, actual_tilt_deg)
+            if self.camera_pose_pub is not None:
+                self.camera_pose_pub.publish(camera_pose)
+            self.camera_actual_pose_pub.publish(camera_pose)
+            actual_camera_yaw_msg = Float32()
+            actual_camera_yaw_msg.data = float(actual_camera_yaw)
+            self.camera_actual_world_yaw_pub.publish(actual_camera_yaw_msg)
+            if self.target_camera_world_yaw is not None:
+                camera_yaw_error_msg = Float32()
+                camera_yaw_error_msg.data = float(wrap_pi(actual_camera_yaw - self.target_camera_world_yaw))
+                self.camera_error_world_yaw_pub.publish(camera_yaw_error_msg)
             target_tilt_msg = Float32()
             target_tilt_msg.data = float(target_tilt_deg)
             self.follow_target_tilt_pub.publish(target_tilt_msg)

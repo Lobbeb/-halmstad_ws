@@ -87,8 +87,12 @@ class LeaderEstimator(Node):
         self.declare_parameter("constant_range_m", 5.0, dyn_num)
         self.range_mode = str(yaml_param(self, "range_mode")).strip().lower()
         self.depth_scale = float(yaml_param(self, "depth_scale", descriptor=dyn_num))
+        self.depth_timeout_s = float(yaml_param(self, "depth_timeout_s", descriptor=dyn_num))
+        self.depth_patch_min_valid_px = max(1, int(yaml_param(self, "depth_patch_min_valid_px", descriptor=dyn_num)))
         self.depth_min_m = float(yaml_param(self, "depth_min_m", descriptor=dyn_num))
         self.depth_max_m = float(yaml_param(self, "depth_max_m", descriptor=dyn_num))
+        self.depth_ground_max_delta_m = float(yaml_param(self, "depth_ground_max_delta_m", descriptor=dyn_num))
+        self.depth_max_estimate_jump_m = float(yaml_param(self, "depth_max_estimate_jump_m", descriptor=dyn_num))
         self.target_ground_z_m = float(yaml_param(self, "target_ground_z_m", descriptor=dyn_num))
         self.ground_min_range_m = float(yaml_param(self, "ground_min_range_m", descriptor=dyn_num))
         self.ground_max_range_m = float(yaml_param(self, "ground_max_range_m", descriptor=dyn_num))
@@ -106,6 +110,8 @@ class LeaderEstimator(Node):
             raise ValueError("est_hz must be > 0")
         if self.image_timeout_s <= 0.0:
             raise ValueError("image_timeout_s must be > 0")
+        if self.depth_timeout_s <= 0.0:
+            raise ValueError("depth_timeout_s must be > 0")
         if self.uav_pose_timeout_s <= 0.0:
             raise ValueError("uav_pose_timeout_s must be > 0")
         if self.external_detection_timeout_s <= 0.0:
@@ -403,8 +409,11 @@ class LeaderEstimator(Node):
             return None
         return None
 
-    def _depth_range_at(self, det: Detection2D) -> Optional[float]:
-        if self.last_depth_msg is None:
+    def depth_fresh(self, now: Time) -> bool:
+        return self._is_fresh(self.last_depth_stamp, self.depth_timeout_s, now)
+
+    def _depth_range_at(self, det: Detection2D, now: Time) -> Optional[float]:
+        if self.last_depth_msg is None or not self.depth_fresh(now):
             return None
         depth = self._depth_to_array_m(self.last_depth_msg)
         if depth is None:
@@ -417,9 +426,43 @@ class LeaderEstimator(Node):
         patch = depth[max(0, v - 2):min(h, v + 3), max(0, u - 2):min(w, u + 3)]
         patch = patch[np.isfinite(patch)]
         patch = patch[(patch >= self.depth_min_m) & (patch <= self.depth_max_m)]
-        if patch.size == 0:
+        if patch.size < self.depth_patch_min_valid_px:
             return None
         return float(np.median(patch))
+
+    def _depth_reject_reason(
+        self,
+        x: float,
+        y: float,
+        depth_range: float,
+        ground_range: Optional[float],
+        now: Time,
+        track_id: Optional[int],
+    ) -> str:
+        if (
+            ground_range is not None
+            and self.depth_ground_max_delta_m > 0.0
+            and abs(depth_range - ground_range) > self.depth_ground_max_delta_m
+        ):
+            return "depth_ground_mismatch"
+        if self.depth_max_estimate_jump_m <= 0.0:
+            return "none"
+        if self.last_estimate_pose is None or self.last_estimate_stamp is None:
+            return "none"
+        age_s = max(0.0, (now - self.last_estimate_stamp).nanoseconds * 1e-9)
+        freshness_window_s = max(self.external_detection_timeout_s, self.image_timeout_s, self.uav_pose_timeout_s)
+        if age_s > freshness_window_s:
+            return "none"
+        if (
+            track_id is not None
+            and self.last_estimate_track_id is not None
+            and track_id != self.last_estimate_track_id
+        ):
+            return "none"
+        jump_m = math.hypot(x - self.last_estimate_pose.x, y - self.last_estimate_pose.y)
+        if jump_m > self.depth_max_estimate_jump_m:
+            return "depth_jump"
+        return "none"
 
     def _ground_projection_pixel(self, det: Detection2D) -> Tuple[float, float]:
         if det.obb_corners is not None and len(det.obb_corners) == 4:
@@ -551,7 +594,7 @@ class LeaderEstimator(Node):
         assert self.uav_pose is not None
         center_x_n = (det.u - cam.cx) / cam.fx
         center_bearing = self.cam_yaw_offset_rad - math.atan2(center_x_n, 1.0)
-        depth_range = self._depth_range_at(det)
+        depth_range = self._depth_range_at(det, now)
         ground_u: Optional[float] = None
         ground_v: Optional[float] = None
         ground_range: Optional[float] = None
@@ -570,9 +613,23 @@ class LeaderEstimator(Node):
                 if reject_reason != "none":
                     ground_range = None
                     ground_bearing = None
+        depth_reject_reason = "none"
+        if depth_range is not None:
+            depth_x = cam_world_x + depth_range * math.cos(self.uav_pose.yaw + center_bearing)
+            depth_y = cam_world_y + depth_range * math.sin(self.uav_pose.yaw + center_bearing)
+            depth_reject_reason = self._depth_reject_reason(
+                depth_x,
+                depth_y,
+                depth_range,
+                ground_range,
+                now,
+                det.track_id,
+            )
+            if depth_reject_reason != "none":
+                depth_range = None
         if self.range_mode == "depth":
             if depth_range is None:
-                raise ValueError("depth_range_invalid")
+                raise ValueError(depth_reject_reason if depth_reject_reason != "none" else "depth_range_invalid")
             range_m = depth_range
             range_source = "depth"
         elif self.range_mode == "ground":
@@ -584,6 +641,8 @@ class LeaderEstimator(Node):
         elif self.range_mode == "const":
             range_m, range_source = self._constant_target_range()
         else:
+            if depth_reject_reason != "none" and reject_reason == "none":
+                reject_reason = depth_reject_reason
             if depth_range is not None:
                 range_m = depth_range
                 range_source = "depth"
@@ -688,15 +747,19 @@ class LeaderEstimator(Node):
     def _distance_status_line(self, now: Time) -> str:
         est_d, est_xy = self._estimated_distance_values(now)
         real_d, real_xy, real_z = self._actual_distance_values(now)
+        range_m_text = "na" if self.last_range_used_m < 0.0 else f"{self.last_range_used_m:.2f}"
         est_d_text = "na" if est_d is None else f"{est_d:.2f}"
         est_xy_text = "na" if est_xy is None else f"{est_xy:.2f}"
         real_d_text = "na" if real_d is None else f"{real_d:.2f}"
         real_xy_text = "na" if real_xy is None else f"{real_xy:.2f}"
         real_z_text = "na" if real_z is None else f"{real_z:.2f}"
+        err_d_text = "na" if est_d is None or real_d is None else f"{(est_d - real_d):.2f}"
+        err_xy_text = "na" if est_xy is None or real_xy is None else f"{(est_xy - real_xy):.2f}"
         return (
-            f"range_src={self.last_range_source} "
+            f"range_src={self.last_range_source} range_m={range_m_text} "
             f"est_d_m={est_d_text} est_xy_m={est_xy_text} "
-            f"real_d_m={real_d_text} real_xy_m={real_xy_text} real_z_m={real_z_text}"
+            f"real_d_m={real_d_text} real_xy_m={real_xy_text} real_z_m={real_z_text} "
+            f"err_d_m={err_d_text} err_xy_m={err_xy_text}"
         )
 
     def _detection_status_overlay_lines(self, now: Time) -> list[str]:
@@ -788,7 +851,7 @@ class LeaderEstimator(Node):
         dy = self.last_estimate_pose.y - self.uav_pose.y
         dz = self.last_estimate_pose.z - self.uav_pose.z
         est_xy = math.hypot(dx, dy)
-        est_d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        est_d = math.hypot(est_xy, dz)
         return est_d, est_xy
 
     def _estimated_distance_lines(self, now: Time) -> list[str]:
@@ -810,7 +873,7 @@ class LeaderEstimator(Node):
         dz = self.last_actual_leader_pose.z - self.uav_pose.z
         real_xy = math.hypot(dx, dy)
         real_z = abs(dz)
-        real_d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        real_d = math.hypot(real_xy, real_z)
         return real_d, real_xy, real_z
 
     def _actual_range_lines(self, now: Time) -> list[str]:

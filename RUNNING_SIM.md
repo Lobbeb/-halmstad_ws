@@ -333,10 +333,11 @@ Direct recorder wrapper:
 Bag monitor helper:
 
 ```bash
-./run.sh monitor_bag warehouse/const_test_yolo_0313-015514 /coord/leader_estimate_status /coord/leader_distance_debug
+./run.sh bag_monitor const_test
+./run.sh bag_monitor const_test /coord/leader_estimate_status /coord/leader_distance_debug
 ```
 
-`monitor_bag` resolves relative bag paths under `bags/experiments/`. You can pass either the experiment run directory or its `bag/` subdirectory.
+`bag_monitor` resolves relative bag paths under `bags/experiments/`. You can pass either the experiment run directory, its `bag/` subdirectory, or a short run token like `const_test` / `depth_test` and it will use the latest matching bag. If you pass no topics, it runs `ros2 bag info` and prints the recorded `topics.txt` list when available. If you do pass topics in an interactive terminal, it renders them as a live block dashboard instead of raw scrolling `ros2 topic echo` output. `leader_...` string topics are reformatted into fixed-width key/value columns, and `leader_distance_debug` uses a dedicated grouped layout with `range_src`, `range_m`, estimated distances, real distances, and signed distance deltas on separate rows.
 
 Default recorder output:
 - `bags/experiments/<world>/<timestamp>_<mode>/`
@@ -349,8 +350,8 @@ Recorder topic groups:
   - `/<uav>/pose`
   - `/<uav>/pose_cmd`
   - `/<uav>/pose_cmd/odom`
-  - `/<uav>/camera/actual/center_pose`
-  - `/<uav>/camera/target/center_pose`
+  - `/<uav>/camera0/actual/center_pose`
+  - `/<uav>/camera0/target/center_pose`
   - `/<uav>/follow/actual/anchor_pose`
   - `/<uav>/follow/target/anchor_pose`
 - YOLO mode adds:
@@ -398,7 +399,7 @@ Wrapper:
 Current capture-topic baseline:
 - image topic default is `/<uav>/camera0/image_raw`
 - camera info default is `/<uav>/camera0/camera_info`
-- camera pose default is `/<uav>/camera/actual/center_pose`
+- camera pose default is `/<uav>/camera0/actual/center_pose`
 - target pose default is `/<ugv>/amcl_pose_odom`, not raw `/platform/odom`
 - older legacy `/<uav>/debug_camera_pose` is not published unless the simulator is started with legacy debug topics enabled
 
@@ -789,7 +790,7 @@ This creates:
   - enable legacy `/<uav>/pose_cmd` and `/<uav>/pose_cmd/odom`
 - `publish_camera_debug_topics:=true|false`
   - default `false` in `./run.sh 1to1_yolo`
-  - enable `/<uav>/camera/target/*`
+  - enable `/<uav>/camera0/{target,debug}/*`
 - `tracker:=true|false`
   - default `false`
   - `true` switches `external_detection_node:=tracker`

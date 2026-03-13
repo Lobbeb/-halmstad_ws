@@ -6,12 +6,12 @@
 
 
     <xacro:macro name="lrs_camera_gimbal"
-                 params="name parent_link link_name topic_base frame_id update_rate im_width im_height im_format hfov_deg far_clip robot_type robot_name x_offset:=0.0 y_offset:=0.0 z_offset:=0.0 pitch_offset:=0.0 yaw_offset:=0.0 sensor_roll_offset:=0.0 sensor_pitch_offset:=0.0 sensor_yaw_offset:=0.0">
+                 params="name parent_link link_name topic_base frame_id update_rate im_width im_height im_format hfov_deg far_clip robot_type robot_name x_offset:=0.0 y_offset:=0.0 z_offset:=0.0 pitch_offset:=0.0 yaw_offset:=0.0 sensor_roll_offset:=0.0 sensor_pitch_offset:=0.0 sensor_yaw_offset:=0.0 kinematic:=true">
 
       <link name="${link_name}">
          <pose rotation_format="euler_rpy" degrees="true">${x_offset} ${y_offset} ${z_offset} 0 ${pitch_offset} ${yaw_offset}</pose>
             <gravity>false</gravity>
-            <kinematic>true</kinematic>
+            <kinematic>${kinematic}</kinematic>
             <inertial>
                 <mass>0.01</mass>
                 <inertia>

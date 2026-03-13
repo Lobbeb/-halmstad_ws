@@ -356,12 +356,12 @@ class UgvNav2Driver(Node):
         fixed_last_waypoint = ordered_waypoints[-1]
         randomizable_waypoints = ordered_waypoints[:-1]
 
-        if self.goal_sequence_randomize and len(randomizable_waypoints) > 1:
-            rotate_by = rng.randrange(len(randomizable_waypoints))
-            randomizable_waypoints = randomizable_waypoints[rotate_by:] + randomizable_waypoints[:rotate_by]
-
-        if self.goal_sequence_random_reverse and len(randomizable_waypoints) > 1 and rng.random() < 0.5:
-            randomizable_waypoints.reverse()
+        if len(randomizable_waypoints) > 1:
+            randomizable_waypoints = self._reorder_file_waypoints_for_forward_start(
+                randomizable_waypoints,
+                start_pose,
+                rng,
+            )
 
         ordered_waypoints = randomizable_waypoints + [fixed_last_waypoint]
 
@@ -416,6 +416,49 @@ class UgvNav2Driver(Node):
                     )
                 )
         return waypoints
+
+    def _reorder_file_waypoints_for_forward_start(
+        self,
+        randomizable_waypoints,
+        start_pose: Pose2DState,
+        rng: random.Random,
+    ):
+        if len(randomizable_waypoints) <= 1:
+            return list(randomizable_waypoints)
+
+        start_indices = self._forward_start_indices(randomizable_waypoints, start_pose)
+        if start_indices:
+            if self.goal_sequence_randomize:
+                rotate_by = rng.choice(start_indices)
+            else:
+                rotate_by = start_indices[0]
+        elif self.goal_sequence_randomize:
+            rotate_by = rng.randrange(len(randomizable_waypoints))
+        else:
+            rotate_by = 0
+
+        ordered = list(randomizable_waypoints[rotate_by:]) + list(randomizable_waypoints[:rotate_by])
+
+        if self.goal_sequence_random_reverse and len(ordered) > 1 and rng.random() < 0.5:
+            ordered = [ordered[0]] + list(reversed(ordered[1:]))
+
+        return ordered
+
+    def _forward_start_indices(self, waypoints, start_pose: Pose2DState):
+        heading_x = math.cos(start_pose.yaw)
+        heading_y = math.sin(start_pose.yaw)
+        forward_indices = []
+
+        for index, waypoint in enumerate(waypoints):
+            if not isinstance(waypoint, dict):
+                continue
+            dx = float(waypoint["x"]) - start_pose.x
+            dy = float(waypoint["y"]) - start_pose.y
+            forward_projection = dx * heading_x + dy * heading_y
+            if forward_projection > 0.0:
+                forward_indices.append(index)
+
+        return forward_indices
 
     def _build_waypoints(self, start_pose: Pose2DState):
         explicit_waypoints = self._build_explicit_waypoints(start_pose)
