@@ -105,9 +105,206 @@ camera_tracker:
     pan_image_center_max_deg: 10.0  # Clamp image-based pan correction so it cannot dominate geometry pan.
     tilt_image_center_gain: 0.8  # Scale vertical image-angle error into extra tilt correction.
     tilt_image_center_max_deg: 10.0  # Clamp image-based tilt correction so it cannot dominate geometry tilt.
+    trackable_hold_timeout_s: 0.40  # Keep using the last trackable leader pose briefly so pan does not freeze instantly on short estimate dropouts.
     publish_debug_topics: true  # Publish /<uav>/camera/{target,debug}/* geometry and image-centering topics.
     pose_timeout_s: 3.0    # Treat leader/UAV pose data as stale after this many seconds.
     tick_hz: 20.0         # Camera pan/tilt update rate.
+
+selected_target_filter:
+  ros__parameters:
+    use_sim_time: true  # Run the Step 3 trust/smoothing layer on Gazebo/ROS simulation time.
+
+    in_topic: /coord/leader_selected_target  # Raw selected-target state published by the estimator.
+    out_topic: /coord/leader_selected_target_filtered  # Filtered controller-facing selected target.
+    status_topic: /coord/leader_selected_target_filtered_status  # Human-readable filter state/debug topic.
+    publish_status: true  # Publish filter status for tuning and bag validation.
+
+    tick_hz: 20.0  # Filter output/update rate.
+    target_timeout_s: 1.0  # Treat the raw selected target as stale after this timeout.
+    hold_timeout_s: 0.70  # Keep the filtered target alive briefly across short gaps.
+    prediction_enable: true  # Allow a lightweight image-space predictive hold over short gaps.
+    prediction_max_gap_s: 0.35  # Only predict over short target-loss gaps.
+    max_predict_center_shift_px: 120.0  # Clamp the predictive image-center shift to avoid wild extrapolation.
+
+    strong_confidence_threshold: 0.65  # Strong-confidence updates are accepted and smoothed normally.
+    weak_confidence_threshold: 0.35  # Weak-confidence updates may still pass if continuity checks succeed.
+    min_confidence_threshold: 0.12  # Lower-confidence updates below this are rejected outright.
+    track_switch_min_confidence: 0.60  # Require stronger evidence before accepting a track switch.
+    track_switch_min_age_s: 0.20  # Require a short minimum track age before switching tracks.
+
+    same_track_center_jump_px_max: 140.0  # Reject same-track jumps that are too large in image space.
+    track_switch_center_jump_px_max: 260.0  # Reject implausible track switches in image space.
+    same_track_area_ratio_max: 2.5  # Reject same-track scale changes that are too abrupt.
+    track_switch_area_ratio_max: 3.5  # Reject implausible track switches in scale/area.
+    range_jump_max_m: 4.0  # Reject implausible projected-range jumps.
+    hold_last_range_on_missing: true  # Preserve the last filtered projected range across short range dropouts.
+    low_conf_reacquire_enable: true  # Allow a recent plausible low-confidence target to reacquire after a short dropout.
+    low_conf_reacquire_timeout_s: 0.90  # Only allow low-confidence reacquire from very recent accepted target history.
+    low_conf_reacquire_center_jump_px_max: 240.0  # Reject low-confidence reacquire if image-space jump is too large.
+    low_conf_reacquire_area_ratio_max: 4.5  # Reject low-confidence reacquire if scale changes are too abrupt.
+    low_conf_reacquire_range_jump_max_m: 6.0  # Reject low-confidence reacquire if projected range jumps too far.
+
+    center_alpha_strong: 0.65  # Strong-confidence smoothing for bbox center.
+    center_alpha_weak: 0.35  # Weak-confidence smoothing for bbox center.
+    size_alpha_strong: 0.55  # Strong-confidence smoothing for bbox size/area.
+    size_alpha_weak: 0.30  # Weak-confidence smoothing for bbox size/area.
+    range_alpha_strong: 0.60  # Strong-confidence smoothing for projected range.
+    range_alpha_weak: 0.30  # Weak-confidence smoothing for projected range.
+
+visual_target_estimator:
+  ros__parameters:
+    use_sim_time: true  # Run the controller-facing target-state estimator on Gazebo/ROS simulation time.
+
+    selected_target_topic: /coord/leader_selected_target_filtered  # Filtered target input from the Step 3 trust layer.
+    camera_info_topic: /dji0/camera0/camera_info  # Camera intrinsics input used to lift image features into camera-relative geometry.
+    out_topic: /coord/leader_visual_target_estimate  # Upgraded controller-facing relative-state estimate.
+    status_topic: /coord/leader_visual_target_estimate_status  # Human-readable estimator state/debug topic.
+    publish_status: true  # Publish readable estimator state/source/quality debug.
+
+    tick_hz: 20.0  # Estimator update/publish rate.
+    target_timeout_s: 1.0  # Treat the filtered selected target as stale after this timeout.
+    prediction_max_gap_s: 0.45  # Allow a slightly longer short-horizon prediction when measurements drop out briefly.
+    prefer_intrinsics_normalization: true  # Use fx/fy when available; otherwise fall back to image width/height.
+
+    range_signal_mode: auto  # auto prefers projected range and falls back to area-derived pseudo-range.
+    reference_range_m: 7.0  # Reference depth used for area-derived pseudo-range.
+    reference_area_norm: 0.009  # Reference bbox area fraction paired with reference_range_m.
+    min_area_norm_valid: 0.002  # Reject very small boxes before area-derived range is allowed.
+    projected_range_min_m: 0.5  # Smallest projected range accepted into the upgraded estimate.
+    projected_range_max_m: 25.0  # Largest projected range accepted into the upgraded estimate.
+    auto_projected_reacquire_ticks: 3  # Require this many good projected-range samples before re-entering projected mode.
+    auto_projected_loss_ticks: 4  # Require this many bad projected-range samples before dropping projected mode.
+
+    position_alpha_projected: 0.65  # Alpha-beta position correction gain for projected-range measurements.
+    position_alpha_area: 0.45  # Alpha-beta position correction gain for area-derived measurements.
+    velocity_beta_projected: 0.35  # Alpha-beta velocity correction gain for projected-range measurements.
+    velocity_beta_area: 0.18  # Alpha-beta velocity correction gain for area-derived measurements.
+    max_velocity_mps: 8.0  # Clamp camera-relative target velocity estimates to a sane range.
+
+follow_point_generator:
+  ros__parameters:
+    use_sim_time: true  # Run the follow-point generator on Gazebo/ROS simulation time.
+
+    target_estimate_topic: /coord/leader_visual_target_estimate  # Estimator-backed target state input.
+    target_pose_topic: /coord/leader_estimate  # World-frame target pose used to keep the follow point behind the UGV heading instead of orbiting its motion trace.
+    prefer_target_pose_position: true  # Prefer the estimator's world-frame target XY so the follow point stays anchored behind the UGV instead of circling the camera projection.
+    uav_pose_topic: /dji0/pose  # Current UAV pose used to keep the follow point in the right frame and altitude.
+    camera_pose_topic: /dji0/camera/actual/center_pose  # Actual camera-center pose used to project the relative estimate into world XY.
+    out_topic: /coord/leader_follow_point  # World-frame spatial follow goal for the bridge.
+    status_topic: /coord/leader_follow_point_status  # Human-readable follow-point generator state/debug topic.
+    publish_status: true  # Publish readable follow-point state for tuning and validation.
+
+    tick_hz: 20.0  # Follow-point update rate.
+    target_estimate_timeout_s: 1.0  # Treat the estimator-backed target state as stale after this timeout.
+    uav_pose_timeout_s: 0.5  # Treat UAV pose as stale after this timeout.
+    camera_pose_timeout_s: 0.5  # Treat camera pose as stale after this timeout.
+    hold_timeout_s: 0.50  # Briefly hold the last valid follow point across short estimate gaps.
+
+    follow_distance_m: 7.0  # Nominal standoff distance behind the target.
+    lateral_offset_m: 0.0  # Optional lateral offset from the target motion/view line.
+    lookahead_horizon_s: 0.15  # Keep the behind-target point slightly predictive without pulling too far ahead.
+    min_target_speed_mps: 0.25  # Fall back to target-motion heading above this speed when no fresh target-pose heading is available.
+    prefer_target_pose_heading: true  # Prefer the estimator's world-frame target yaw so the UAV shadows the UGV from behind instead of circling it.
+    target_pose_timeout_s: 0.75  # Treat the target-pose heading as stale after this timeout.
+    heading_dir_alpha: 0.25  # Smooth changes in the chosen behind-heading so turns stay steady.
+    heading_hold_timeout_s: 1.0  # Preserve the last good behind-heading briefly so slow/weak periods do not flip the follow side.
+    target_velocity_alpha: 0.35  # EMA alpha for world-frame target velocity estimation.
+    point_alpha: 0.35  # Smooth the generated follow point more heavily for slower shadow-follow behavior.
+    max_follow_point_jump_m: 1.0  # Keep follow-point jumps smaller so the UAV does not lunge across the target.
+    use_current_altitude: true  # Keep the follow point at the UAV's current altitude by default.
+    fixed_z_m: 7.0  # Fallback altitude if use_current_altitude is disabled.
+    camera_x_offset_m: 0.0  # Camera X offset fallback used when deriving camera pose from UAV pose.
+    camera_y_offset_m: 0.0  # Camera Y offset fallback used when deriving camera pose from UAV pose.
+
+follow_point_planner:
+  ros__parameters:
+    use_sim_time: true  # Run the planner stage on Gazebo/ROS simulation time.
+
+    follow_point_topic: /coord/leader_follow_point  # Raw spatial follow goal from the follow-point generator.
+    uav_pose_topic: /dji0/pose  # Current UAV pose used to seed and validate the planned target.
+    out_topic: /coord/leader_planned_target  # Planned pose target consumed by the bridge in planner mode.
+    status_topic: /coord/leader_planned_target_status  # Human-readable planner state/debug topic.
+    publish_status: true  # Publish readable planner state for tuning and validation.
+
+    tick_hz: 20.0  # Planner update rate.
+    follow_point_timeout_s: 0.5  # Treat the raw follow point as stale after this timeout.
+    pose_timeout_s: 0.5  # Treat UAV pose as stale after this timeout.
+    hold_timeout_s: 0.5  # Briefly hold the last planned target across short follow-point gaps.
+
+    xy_alpha: 0.30  # Move more conservatively toward each follow point for a steadier shadow-follow path.
+    yaw_alpha: 0.40  # Turn more gradually toward the follow-point yaw.
+    max_planned_step_m: 0.25  # Keep each planner update to a small XY target jump.
+    max_planned_yaw_step_rad: 0.08  # Keep each planner update to a small yaw jump.
+    seed_from_uav_pose: true  # Start the planner from the current UAV pose instead of teleporting to the raw follow point.
+    use_follow_point_altitude: true  # Preserve the follow-point altitude policy.
+    fixed_z_m: 7.0  # Fallback altitude if the follow point lacks a finite Z value.
+
+visual_follow_controller:
+  ros__parameters:
+    use_sim_time: true  # Run this optional test controller on Gazebo/ROS simulation time.
+
+    selected_target_topic: /coord/leader_selected_target_filtered  # Filtered controller-facing selected target from the Step 3 trust layer.
+    target_estimate_topic: /coord/leader_visual_target_estimate  # Upgraded camera-relative target estimate preferred by the controller.
+    out_topic: /coord/leader_visual_control  # Proposed test-mode visual-follow command output.
+    status_topic: /coord/leader_visual_control_status  # Human-readable mirror of the controller state.
+    debug_image_topic: /coord/leader_visual_control_debug_image  # Visual-follow debug overlay image.
+    publish_status: true  # Publish the readable status line alongside the structured test command.
+    publish_debug_topics: true  # Publish numeric controller debug topics under out_topic/debug/*.
+    publish_debug_image: true  # Publish the controller's own debug image overlay.
+
+    tick_hz: 20.0  # Visual-control output loop rate.
+    target_timeout_s: 1.0  # Treat the selected target state as stale after this timeout.
+    target_estimate_timeout_s: 1.0  # Treat the upgraded estimate as stale after this timeout.
+    prefer_target_estimate: true  # Prefer the upgraded camera-relative estimate and fall back to filtered target geometry only if needed.
+    loss_hold_timeout_s: 0.50  # Briefly hold and decay the last valid command across short target loss.
+    distance_signal_mode: auto  # auto prefers projected range, range forces projected range, area forces bbox/OBB area proxy.
+    prefer_intrinsics_normalization: true  # Use fx/fy when camera intrinsics are available; otherwise fall back to image size.
+
+    target_range_m: 7.0  # Preferred follow distance when projected non-const range is available.
+    target_area_norm: 0.009  # Area fallback target as a fraction of the image when projected range is unavailable.
+    yaw_gain: 5.0  # Convert normalized horizontal image error into yaw-rate command.
+    forward_range_gain: 0.75  # Convert projected-range error into forward/back speed.
+    forward_area_gain: 5.0  # Convert sqrt(area) proxy error into forward/back speed.
+    yaw_error_deadband_norm: 0.003  # Ignore tiny horizontal image errors near the desired center.
+    range_error_deadband_m: 0.25  # Ignore tiny projected-range errors near the target distance.
+    area_error_deadband_norm: 0.015  # Ignore tiny bbox-area proxy errors near the target area.
+    min_area_norm_valid: 0.002  # Reject very tiny image areas before area-mode control is allowed.
+    range_valid_min_m: 0.5  # Smallest projected range accepted by the controller.
+    range_valid_max_m: 25.0  # Largest projected range accepted by the controller.
+    auto_range_reacquire_ticks: 3  # Require this many consecutive valid range samples before switching back from area mode.
+    auto_range_loss_ticks: 4  # Require this many consecutive bad range samples before dropping range mode.
+    yaw_rate_max_rad_s: 1.0  # Clamp the yaw-rate command from image-space steering.
+    forward_speed_max_mps: 1.0  # Clamp the forward/back speed command.
+    yaw_slew_rate_rad_s2: 3.0  # Slew limit for yaw-rate command changes.
+    forward_slew_rate_mps2: 2.0  # Slew limit for forward-speed command changes.
+    yaw_release_rate_rad_s2: 6.0  # Let yaw-rate decay faster than it ramps up when tracking quality drops.
+    forward_release_rate_mps2: 4.0  # Let forward speed decay faster than it ramps up on short loss/no-distance cases.
+
+visual_actuation_bridge:
+  ros__parameters:
+    use_sim_time: true  # Run the optional bridge on Gazebo/ROS simulation time.
+
+    input_mode: auto  # auto uses planned_target, then follow_point, and otherwise holds; explicit control mode is required for raw controller fallback.
+    visual_control_topic: /coord/leader_visual_control  # Input from the visual-follow controller.
+    follow_point_topic: /coord/leader_follow_point  # Input from the follow-point generator when input_mode:=follow_point.
+    planned_target_topic: /coord/leader_planned_target  # Input from the planner stage when input_mode:=planned_target.
+    uav_pose_topic: ""  # Defaults to /<uav>/pose when left empty.
+    out_topic: ""  # Defaults to /<uav>/psdk_ros2/flight_control_setpoint_ENUposition_yaw when left empty.
+    pose_cmd_topic: ""  # Defaults to /<uav>/pose_cmd when left empty.
+    status_topic: /coord/leader_visual_actuation_bridge_status  # Human-readable bridge state/debug topic.
+
+    tick_hz: 20.0  # Bridge update rate.
+    control_timeout_s: 0.5  # Treat controller output as stale after this timeout and hold position.
+    follow_point_timeout_s: 0.5  # Treat the follow point as stale after this timeout and hold the current pose.
+    planned_target_timeout_s: 0.5  # Treat the planned target as stale after this timeout and hold the current pose.
+    pose_timeout_s: 0.5  # Treat UAV pose as stale after this timeout and stop bridging.
+    forward_scale: 1.0  # Optional tuning scale applied to controller forward speed before conversion.
+    yaw_scale: 1.0  # Optional tuning scale applied to controller yaw rate before conversion.
+    max_xy_step_m: 0.12  # Keep bridge motion slow and bounded so the UAV shadows instead of surging ahead.
+    max_yaw_step_rad: 0.12  # Keep bridge yaw changes bounded for smoother turning behind the UGV.
+    publish_pose_cmd_mirror: true  # Publish the /<uav>/pose_cmd mirror path while bridge mode owns actuation.
+    use_current_altitude: true  # Hold the current UAV altitude during bridge mode.
+    fixed_z_m: 7.0  # Fallback altitude if use_current_altitude is disabled.
 
 leader_detector:
   ros__parameters:
@@ -158,6 +355,9 @@ leader_estimator:
     external_detection_timeout_s: 1.0  # Treat detector/tracker output as stale after this timeout.
     external_detection_topic: /coord/leader_detection  # Detection topic carrying bbox/OBB JSON from detector/tracker.
     external_detection_status_topic: /coord/leader_detection_status  # Detector/tracker status topic used only for estimator debug-image overlay.
+    selected_target_topic: /coord/leader_selected_target  # Clean selected-target topic for the visual-follow controller.
+    camera_tilt_topic: ""  # Defaults to /<uav>/follow/actual/tilt_deg when left empty.
+    camera_world_yaw_topic: ""  # Defaults to /<uav>/camera/actual/world_yaw_rad when left empty.
     leader_actual_pose_enable: true  # Enable optional truth/diagnostic leader pose input.
     leader_actual_pose_timeout_s: 2.0  # Treat truth pose as stale after this timeout.
     leader_actual_pose_topic: /a201_0000/amcl_pose_odom  # Optional truth leader pose used only for diagnostics/testing.
@@ -165,6 +365,7 @@ leader_estimator:
     publish_debug_image: true  # Publish a diagnostic overlay image.
     publish_events: true  # Publish estimator lifecycle/debug events on event_topic.
     publish_fault_status: true  # Publish fault/state transitions on fault_status_topic.
+    publish_selected_target: true  # Publish the selected target as a controller-facing structured topic.
     publish_status: true  # Publish status strings with state/confidence/latency.
     status_topic: /coord/leader_estimate_status  # Status topic consumed by estimate-follow.
     fault_status_topic: /coord/leader_estimate_fault  # Latched estimator fault topic.
@@ -178,6 +379,7 @@ leader_estimator:
     cam_z_offset_m: 0.0  # Camera Z offset relative to the UAV body frame.
     image_timeout_s: 1.0  # Treat camera images as stale after this timeout.
     uav_pose_timeout_s: 1.0  # Treat UAV pose as stale after this timeout.
+    camera_orientation_timeout_s: 1.0  # Treat live camera tilt/yaw topics as stale after this timeout and fall back to static offsets.
 
     est_hz: 20.0  # Main estimator loop rate.
 

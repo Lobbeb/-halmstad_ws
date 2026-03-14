@@ -15,8 +15,13 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 from rclpy.time import Time
 from sensor_msgs.msg import CameraInfo, Image
-from std_msgs.msg import String
+from std_msgs.msg import Float32, String
+from vision_msgs.msg import Detection2DArray
 
+from lrs_halmstad.common.selected_target_state import (
+    SelectedTargetState,
+    encode_selected_target_state_msg,
+)
 from lrs_halmstad.follow.follow_math import coerce_bool, quat_from_yaw, wrap_pi, yaw_from_quat
 from lrs_halmstad.perception.detection_protocol import Detection2D, decode_detection_payload
 from lrs_halmstad.perception.detection_status import overlay_lines_from_status
@@ -52,18 +57,22 @@ class LeaderEstimator(Node):
         self.declare_parameter("camera_info_topic", "")
         self.declare_parameter("depth_topic", "")
         self.declare_parameter("uav_pose_topic", "")
+        self.declare_parameter("camera_tilt_topic", "")
+        self.declare_parameter("camera_world_yaw_topic", "")
         self.declare_parameter("external_detection_topic", "/coord/leader_detection")
         self.declare_parameter("external_detection_status_topic", "/coord/leader_detection_status")
         self.declare_parameter("out_topic", "/coord/leader_estimate")
         self.declare_parameter("status_topic", "/coord/leader_estimate_status")
         self.declare_parameter("fault_status_topic", "/coord/leader_estimate_fault")
         self.declare_parameter("estimate_error_topic", "/coord/leader_estimate_error")
+        self.declare_parameter("selected_target_topic", "/coord/leader_selected_target")
         self.declare_parameter("event_topic", "/coord/events")
         self.declare_parameter("debug_image_topic", "/coord/leader_debug_image")
 
         self.declare_parameter("publish_status", True)
         self.declare_parameter("publish_fault_status", True)
         self.declare_parameter("publish_debug_image", True)
+        self.declare_parameter("publish_selected_target", True)
         self.declare_parameter("publish_events", False)
 
         self.declare_parameter("leader_actual_pose_enable", True)
@@ -74,6 +83,7 @@ class LeaderEstimator(Node):
         self.declare_parameter("image_timeout_s", 1.0, dyn_num)
         self.declare_parameter("uav_pose_timeout_s", 1.0, dyn_num)
         self.declare_parameter("external_detection_timeout_s", 1.0, dyn_num)
+        self.declare_parameter("camera_orientation_timeout_s", 1.0, dyn_num)
 
         self.declare_parameter("constant_range_m", 5.0, dyn_num)
         self.declare_parameter("range_mode", "auto")
@@ -97,18 +107,28 @@ class LeaderEstimator(Node):
         self.camera_info_topic = str(self.get_parameter("camera_info_topic").value).strip() or f"/{self.uav_name}/camera0/camera_info"
         self.depth_topic = str(self.get_parameter("depth_topic").value).strip()
         self.uav_pose_topic = str(self.get_parameter("uav_pose_topic").value).strip() or f"/{self.uav_name}/pose"
+        self.camera_tilt_topic = (
+            str(self.get_parameter("camera_tilt_topic").value).strip()
+            or f"/{self.uav_name}/follow/actual/tilt_deg"
+        )
+        self.camera_world_yaw_topic = (
+            str(self.get_parameter("camera_world_yaw_topic").value).strip()
+            or f"/{self.uav_name}/camera/actual/world_yaw_rad"
+        )
         self.external_detection_topic = str(self.get_parameter("external_detection_topic").value).strip()
         self.external_detection_status_topic = str(self.get_parameter("external_detection_status_topic").value).strip()
         self.out_topic = str(self.get_parameter("out_topic").value).strip()
         self.status_topic = str(self.get_parameter("status_topic").value).strip()
         self.fault_status_topic = str(self.get_parameter("fault_status_topic").value).strip()
         self.estimate_error_topic = str(self.get_parameter("estimate_error_topic").value).strip()
+        self.selected_target_topic = str(self.get_parameter("selected_target_topic").value).strip()
         self.event_topic = str(self.get_parameter("event_topic").value).strip()
         self.debug_image_topic = str(self.get_parameter("debug_image_topic").value).strip()
 
         self.publish_status = coerce_bool(self.get_parameter("publish_status").value)
         self.publish_fault_status = coerce_bool(self.get_parameter("publish_fault_status").value)
         self.publish_debug_image = coerce_bool(self.get_parameter("publish_debug_image").value)
+        self.publish_selected_target = coerce_bool(self.get_parameter("publish_selected_target").value)
         self.publish_events = coerce_bool(self.get_parameter("publish_events").value)
 
         self.leader_actual_pose_enable = coerce_bool(self.get_parameter("leader_actual_pose_enable").value)
@@ -119,6 +139,7 @@ class LeaderEstimator(Node):
         self.image_timeout_s = float(self.get_parameter("image_timeout_s").value)
         self.uav_pose_timeout_s = float(self.get_parameter("uav_pose_timeout_s").value)
         self.external_detection_timeout_s = float(self.get_parameter("external_detection_timeout_s").value)
+        self.camera_orientation_timeout_s = float(self.get_parameter("camera_orientation_timeout_s").value)
 
         self.constant_range_m = float(self.get_parameter("constant_range_m").value)
         self.range_mode = str(self.get_parameter("range_mode").value).strip().lower()
@@ -145,6 +166,8 @@ class LeaderEstimator(Node):
             raise ValueError("uav_pose_timeout_s must be > 0")
         if self.external_detection_timeout_s <= 0.0:
             raise ValueError("external_detection_timeout_s must be > 0")
+        if self.camera_orientation_timeout_s <= 0.0:
+            raise ValueError("camera_orientation_timeout_s must be > 0")
         if self.leader_actual_pose_timeout_s <= 0.0:
             raise ValueError("leader_actual_pose_timeout_s must be > 0")
         if self.constant_range_m <= 0.0:
@@ -160,8 +183,13 @@ class LeaderEstimator(Node):
         self.last_image_recv_walltime: Optional[float] = None
         self.last_depth_msg: Optional[Image] = None
         self.last_depth_stamp: Optional[Time] = None
+        self.last_camera_tilt_deg: Optional[float] = None
+        self.last_camera_tilt_stamp: Optional[Time] = None
+        self.last_camera_world_yaw_rad: Optional[float] = None
+        self.last_camera_world_yaw_stamp: Optional[Time] = None
         self.last_external_det: Optional[Detection2D] = None
         self.last_external_det_stamp: Optional[Time] = None
+        self.last_external_det_rx_stamp: Optional[Time] = None
         self.last_external_det_status_text: str = ""
         self.last_external_det_status_stamp: Optional[Time] = None
         self.last_actual_leader_pose: Optional[Pose2D] = None
@@ -182,16 +210,28 @@ class LeaderEstimator(Node):
         self.last_bearing_used_deg: float = 0.0
         self.last_heading_source: str = "none"
         self.last_reject_reason: str = "none"
+        self.last_camera_orientation_source: str = "static"
         self.last_fault_state: str = "none"
         self.last_fault_reason: str = "none"
         self.last_fault_stamp: Optional[Time] = None
         self.last_debug_state: str = "INIT"
         self.last_debug_det: Optional[Detection2D] = None
+        self.last_camera_frame_id: str = ""
 
         self.image_sub = self.create_subscription(Image, self.camera_topic, self.on_image, 10)
         self.camera_info_sub = self.create_subscription(CameraInfo, self.camera_info_topic, self.on_camera_info, 10)
         self.depth_sub = self.create_subscription(Image, self.depth_topic, self.on_depth, 10) if self.depth_topic else None
         self.uav_pose_sub = self.create_subscription(PoseStamped, self.uav_pose_topic, self.on_uav_pose, 10)
+        self.camera_tilt_sub = (
+            self.create_subscription(Float32, self.camera_tilt_topic, self.on_camera_tilt, 10)
+            if self.camera_tilt_topic
+            else None
+        )
+        self.camera_world_yaw_sub = (
+            self.create_subscription(Float32, self.camera_world_yaw_topic, self.on_camera_world_yaw, 10)
+            if self.camera_world_yaw_topic
+            else None
+        )
         self.external_detection_sub = self.create_subscription(String, self.external_detection_topic, self.on_external_detection, 10)
         self.external_detection_status_sub = self.create_subscription(
             String,
@@ -209,6 +249,11 @@ class LeaderEstimator(Node):
         self.status_pub = self.create_publisher(String, self.status_topic, 10)
         self.events_pub = self.create_publisher(String, self.event_topic, 10)
         self.debug_image_pub = self.create_publisher(Image, self.debug_image_topic, 2) if self.publish_debug_image else None
+        self.selected_target_pub = (
+            self.create_publisher(Detection2DArray, self.selected_target_topic, 10)
+            if self.publish_selected_target and self.selected_target_topic
+            else None
+        )
         self.estimate_error_pub = (
             self.create_publisher(Vector3Stamped, self.estimate_error_topic, 10)
             if self.leader_actual_pose_enable
@@ -233,6 +278,7 @@ class LeaderEstimator(Node):
             f"image={self.camera_topic}, camera_info={self.camera_info_topic}, depth={self.depth_topic or 'disabled'}, "
             f"uav_pose={self.uav_pose_topic}, detection={self.external_detection_topic}, "
             f"detection_status={self.external_detection_status_topic}, out={self.out_topic}, "
+            f"selected_target={self.selected_target_topic or 'disabled'}, "
             f"est_hz={self.est_hz}Hz, range_mode={self.range_mode}, constant_range_m={self.constant_range_m:.2f}"
         )
         self.publish_fault_status_msg(self._fault_line("none", "none", self.get_clock().now()))
@@ -290,6 +336,8 @@ class LeaderEstimator(Node):
     def on_image(self, msg: Image) -> None:
         self.last_image_msg = msg
         self.last_image_recv_walltime = time.monotonic()
+        if msg.header.frame_id:
+            self.last_camera_frame_id = str(msg.header.frame_id)
         try:
             self.last_image_stamp = Time.from_msg(msg.header.stamp)
         except Exception:
@@ -309,6 +357,8 @@ class LeaderEstimator(Node):
         fy = float(msg.k[4])
         if fx <= 0.0 or fy <= 0.0:
             return
+        if msg.header.frame_id:
+            self.last_camera_frame_id = str(msg.header.frame_id)
         self.camera_model = CameraModel(
             fx=fx,
             fy=fy,
@@ -351,17 +401,27 @@ class LeaderEstimator(Node):
             det_msg = decode_detection_payload(msg.data)
         except ValueError:
             return
+        now = self.get_clock().now()
         stamp_ns = det_msg.stamp_ns
         if stamp_ns > 0:
             stamp = Time(nanoseconds=stamp_ns, clock_type=self.get_clock().clock_type)
         else:
-            stamp = self.get_clock().now()
+            stamp = now
         self.last_external_det_stamp = stamp
+        self.last_external_det_rx_stamp = now
         self.last_external_det = det_msg.detection
 
     def on_external_detection_status(self, msg: String) -> None:
         self.last_external_det_status_text = str(msg.data)
         self.last_external_det_status_stamp = self.get_clock().now()
+
+    def on_camera_tilt(self, msg: Float32) -> None:
+        self.last_camera_tilt_deg = float(msg.data)
+        self.last_camera_tilt_stamp = self.get_clock().now()
+
+    def on_camera_world_yaw(self, msg: Float32) -> None:
+        self.last_camera_world_yaw_rad = wrap_pi(float(msg.data))
+        self.last_camera_world_yaw_stamp = self.get_clock().now()
 
     def _is_fresh(self, last_stamp: Optional[Time], timeout_s: float, now: Time) -> bool:
         if last_stamp is None:
@@ -380,7 +440,33 @@ class LeaderEstimator(Node):
         return self._is_fresh(self.last_actual_leader_pose_stamp, self.leader_actual_pose_timeout_s, now)
 
     def external_detection_fresh(self, now: Time) -> bool:
-        return self._is_fresh(self.last_external_det_stamp, self.external_detection_timeout_s, now)
+        return self._is_fresh(self.last_external_det_rx_stamp, self.external_detection_timeout_s, now)
+
+    def _camera_orientation(self, now: Time) -> Tuple[float, float, str]:
+        assert self.uav_pose is not None
+        tilt_live = (
+            self.last_camera_tilt_deg is not None
+            and self._is_fresh(self.last_camera_tilt_stamp, self.camera_orientation_timeout_s, now)
+        )
+        yaw_live = (
+            self.last_camera_world_yaw_rad is not None
+            and self._is_fresh(self.last_camera_world_yaw_stamp, self.camera_orientation_timeout_s, now)
+        )
+        pitch_rad = math.radians(float(self.last_camera_tilt_deg)) if tilt_live else self.cam_pitch_offset_rad
+        center_world_yaw = (
+            float(self.last_camera_world_yaw_rad)
+            if yaw_live
+            else wrap_pi(self.uav_pose.yaw + self.cam_yaw_offset_rad)
+        )
+        if tilt_live and yaw_live:
+            source = "live"
+        elif tilt_live:
+            source = "live_tilt"
+        elif yaw_live:
+            source = "live_yaw"
+        else:
+            source = "static"
+        return pitch_rad, center_world_yaw, source
 
     def _cam_world_xy(self) -> Tuple[float, float]:
         assert self.uav_pose is not None
@@ -446,14 +532,20 @@ class LeaderEstimator(Node):
         except Exception:
             return (float(det.u), float(det.v))
 
-    def _ground_range_from_pixel(self, u: float, v: float, cam: CameraModel) -> Optional[float]:
+    def _ground_range_from_pixel(
+        self,
+        u: float,
+        v: float,
+        cam: CameraModel,
+        camera_pitch_rad: float,
+    ) -> Optional[float]:
         assert self.uav_pose is not None
         x_n = (u - cam.cx) / cam.fx
         y_n = (v - cam.cy) / cam.fy
         pitch_img = math.atan2(y_n, math.sqrt(1.0 + x_n * x_n))
         cam_world_z = self.uav_pose.z + self.cam_z_offset_m
         dz = self.target_ground_z_m - cam_world_z
-        elev = self.cam_pitch_offset_rad + pitch_img
+        elev = float(camera_pitch_rad) + pitch_img
         tan_elev = math.tan(elev)
         if abs(tan_elev) < 1e-3:
             return None
@@ -475,15 +567,22 @@ class LeaderEstimator(Node):
             return float(raw_angle)
         return float(reference_angle + wrap_pi(raw_angle - reference_angle))
 
-    def _ground_point_from_pixel(self, u: float, v: float, cam: CameraModel) -> Optional[Tuple[float, float]]:
+    def _ground_point_from_pixel(
+        self,
+        u: float,
+        v: float,
+        cam: CameraModel,
+        camera_pitch_rad: float,
+        camera_center_world_yaw: float,
+    ) -> Optional[Tuple[float, float]]:
         assert self.uav_pose is not None
         x_n = (u - cam.cx) / cam.fx
         y_n = (v - cam.cy) / cam.fy
-        bearing = self.cam_yaw_offset_rad - math.atan2(x_n, 1.0)
+        bearing_world = float(camera_center_world_yaw) - math.atan2(x_n, 1.0)
         pitch_img = math.atan2(y_n, math.sqrt(1.0 + x_n * x_n))
         cam_world_z = self.uav_pose.z + self.cam_z_offset_m
         dz = self.target_ground_z_m - cam_world_z
-        elev = self.cam_pitch_offset_rad + pitch_img
+        elev = float(camera_pitch_rad) + pitch_img
         tan_elev = math.tan(elev)
         if abs(tan_elev) < 1e-3:
             return None
@@ -492,15 +591,17 @@ class LeaderEstimator(Node):
             return None
         cam_world_x, cam_world_y = self._cam_world_xy()
         return (
-            cam_world_x + horiz_range * math.cos(self.uav_pose.yaw + bearing),
-            cam_world_y + horiz_range * math.sin(self.uav_pose.yaw + bearing),
+            cam_world_x + horiz_range * math.cos(bearing_world),
+            cam_world_y + horiz_range * math.sin(bearing_world),
         )
 
     def _obb_heading_from_corners(
         self,
         corners: Tuple[Tuple[float, float], ...],
         cam: CameraModel,
+        now: Time,
     ) -> Optional[float]:
+        camera_pitch_rad, camera_center_world_yaw, _orientation_source = self._camera_orientation(now)
         ordered = self._order_quad(np.asarray(corners, dtype=np.float64))
         edges = np.roll(ordered, -1, axis=0) - ordered
         lengths = np.linalg.norm(edges, axis=1)
@@ -510,8 +611,20 @@ class LeaderEstimator(Node):
         else:
             axis_p1 = 0.5 * (ordered[1] + ordered[2])
             axis_p2 = 0.5 * (ordered[3] + ordered[0])
-        gp1 = self._ground_point_from_pixel(float(axis_p1[0]), float(axis_p1[1]), cam)
-        gp2 = self._ground_point_from_pixel(float(axis_p2[0]), float(axis_p2[1]), cam)
+        gp1 = self._ground_point_from_pixel(
+            float(axis_p1[0]),
+            float(axis_p1[1]),
+            cam,
+            camera_pitch_rad,
+            camera_center_world_yaw,
+        )
+        gp2 = self._ground_point_from_pixel(
+            float(axis_p2[0]),
+            float(axis_p2[1]),
+            cam,
+            camera_pitch_rad,
+            camera_center_world_yaw,
+        )
         if gp1 is None or gp2 is None:
             return None
         dx = gp2[0] - gp1[0]
@@ -545,10 +658,17 @@ class LeaderEstimator(Node):
             return "ground_jump"
         return "none"
 
-    def _estimate_from_detection(self, det: Detection2D, cam: CameraModel, now: Time) -> Tuple[Pose2D, str]:
+    def _estimate_range_from_detection(
+        self,
+        det: Detection2D,
+        cam: CameraModel,
+        now: Time,
+    ) -> Tuple[float, str, float, str, str]:
         assert self.uav_pose is not None
+        camera_pitch_rad, camera_center_world_yaw, orientation_source = self._camera_orientation(now)
         center_x_n = (det.u - cam.cx) / cam.fx
-        center_bearing = self.cam_yaw_offset_rad - math.atan2(center_x_n, 1.0)
+        center_bearing_world = camera_center_world_yaw - math.atan2(center_x_n, 1.0)
+        center_bearing = wrap_pi(center_bearing_world - self.uav_pose.yaw)
         depth_range = self._depth_range_at(det)
         ground_u: Optional[float] = None
         ground_v: Optional[float] = None
@@ -559,11 +679,12 @@ class LeaderEstimator(Node):
         if self.range_mode in ("ground", "auto"):
             ground_u, ground_v = self._ground_projection_pixel(det)
             ground_x_n = (ground_u - cam.cx) / cam.fx
-            ground_bearing = self.cam_yaw_offset_rad - math.atan2(ground_x_n, 1.0)
-            ground_range = self._ground_range_from_pixel(ground_u, ground_v, cam)
+            ground_bearing_world = camera_center_world_yaw - math.atan2(ground_x_n, 1.0)
+            ground_bearing = wrap_pi(ground_bearing_world - self.uav_pose.yaw)
+            ground_range = self._ground_range_from_pixel(ground_u, ground_v, cam, camera_pitch_rad)
             if ground_range is not None and ground_bearing is not None:
-                ground_x = cam_world_x + ground_range * math.cos(self.uav_pose.yaw + ground_bearing)
-                ground_y = cam_world_y + ground_range * math.sin(self.uav_pose.yaw + ground_bearing)
+                ground_x = cam_world_x + ground_range * math.cos(ground_bearing_world)
+                ground_y = cam_world_y + ground_range * math.sin(ground_bearing_world)
                 reject_reason = self._ground_reject_reason(ground_x, ground_y, now, det.track_id)
                 if reject_reason != "none":
                     ground_range = None
@@ -594,6 +715,98 @@ class LeaderEstimator(Node):
                 range_source = "const"
 
         bearing = ground_bearing if range_source == "ground" and ground_bearing is not None else center_bearing
+        return float(range_m), str(range_source), float(bearing), str(reject_reason), str(orientation_source)
+
+    def _selected_target_bbox(self, det: Detection2D) -> Tuple[float, float, float, float, float]:
+        if det.obb_corners is not None and len(det.obb_corners) == 4:
+            ordered = self._order_quad(np.asarray(det.obb_corners, dtype=np.float64))
+            center = np.mean(ordered, axis=0)
+            edge01 = ordered[1] - ordered[0]
+            edge12 = ordered[2] - ordered[1]
+            len01 = float(np.linalg.norm(edge01))
+            len12 = float(np.linalg.norm(edge12))
+            if len01 >= len12:
+                size_x = len01
+                size_y = len12
+                theta = math.atan2(float(edge01[1]), float(edge01[0]))
+            else:
+                size_x = len12
+                size_y = len01
+                theta = math.atan2(float(edge12[1]), float(edge12[0]))
+            return (
+                float(center[0]),
+                float(center[1]),
+                float(size_x),
+                float(size_y),
+                float(theta),
+            )
+        x1, y1, x2, y2 = det.bbox
+        return (
+            0.5 * float(x1 + x2),
+            0.5 * float(y1 + y2),
+            max(0.0, float(x2 - x1)),
+            max(0.0, float(y2 - y1)),
+            0.0,
+        )
+
+    def _selected_target_state(self, now: Time, det: Optional[Detection2D]) -> SelectedTargetState:
+        stamp = (
+            self.last_external_det_stamp.to_msg()
+            if det is not None and self.last_external_det_stamp is not None
+            else now.to_msg()
+        )
+        frame_id = self.last_camera_frame_id
+        if det is None:
+            return SelectedTargetState(
+                stamp=stamp,
+                frame_id=frame_id,
+                valid=False,
+            )
+
+        center_x, center_y, size_x, size_y, theta = self._selected_target_bbox(det)
+        projected_range_m: Optional[float] = None
+        if self.camera_model is not None and self.image_fresh(now) and self.uav_pose_fresh(now):
+            try:
+                range_m, range_source, _bearing, _reject_reason, _orientation_source = self._estimate_range_from_detection(
+                    det,
+                    self.camera_model,
+                    now,
+                )
+                if range_source in ("ground", "depth"):
+                    projected_range_m = float(range_m)
+            except Exception:
+                projected_range_m = None
+
+        cls_label = str(det.cls_name or "")
+        if not cls_label and det.cls_id is not None:
+            cls_label = str(det.cls_id)
+        track_id = "" if det.track_id is None else str(int(det.track_id))
+        track_age_s = float(det.track_age_s) if det.track_age_s > 0.0 else None
+        return SelectedTargetState(
+            stamp=stamp,
+            frame_id=frame_id,
+            valid=True,
+            bbox_center_x_px=center_x,
+            bbox_center_y_px=center_y,
+            bbox_size_x_px=size_x,
+            bbox_size_y_px=size_y,
+            bbox_theta_rad=theta,
+            confidence=float(det.conf),
+            class_id=cls_label,
+            track_id=track_id,
+            projected_range_m=projected_range_m,
+            track_age_s=track_age_s,
+        )
+
+    def _publish_selected_target(self, now: Time, det: Optional[Detection2D]) -> None:
+        if self.selected_target_pub is None:
+            return
+        state = self._selected_target_state(now, det)
+        self.selected_target_pub.publish(encode_selected_target_state_msg(state))
+
+    def _estimate_from_detection(self, det: Detection2D, cam: CameraModel, now: Time) -> Tuple[Pose2D, str]:
+        range_m, range_source, bearing, reject_reason, camera_orientation_source = self._estimate_range_from_detection(det, cam, now)
+        cam_world_x, cam_world_y = self._cam_world_xy()
         x = cam_world_x + range_m * math.cos(self.uav_pose.yaw + bearing)
         y = cam_world_y + range_m * math.sin(self.uav_pose.yaw + bearing)
 
@@ -603,7 +816,7 @@ class LeaderEstimator(Node):
             yaw = det.obb_heading_yaw
             heading_source = "obb"
         elif det.obb_corners is not None:
-            obb_heading = self._obb_heading_from_corners(det.obb_corners, cam)
+            obb_heading = self._obb_heading_from_corners(det.obb_corners, cam, now)
             if obb_heading is not None:
                 yaw = obb_heading
                 det.obb_heading_yaw = obb_heading
@@ -615,6 +828,7 @@ class LeaderEstimator(Node):
         self.last_bearing_used_deg = math.degrees(bearing)
         self.last_heading_source = heading_source
         self.last_reject_reason = reject_reason
+        self.last_camera_orientation_source = camera_orientation_source
         return Pose2D(x=x, y=y, z=self.target_ground_z_m, yaw=yaw), range_source
 
     def _publish_estimate(self, pose: Pose2D, now: Time, track_id: Optional[int]) -> None:
@@ -672,6 +886,7 @@ class LeaderEstimator(Node):
             f"conf={self.last_det_conf:.3f} latency_ms={self.last_latency_ms:.1f} "
             f"range_src={self.last_range_source} range_mode={self.range_mode} range_m={self.last_range_used_m:.2f} "
             f"bearing_deg={self.last_bearing_used_deg:.1f} reject_reason={self.last_reject_reason} "
+            f"cam_orient_src={self.last_camera_orientation_source} "
             f"heading_src={self.last_heading_source} "
             f"err_dx_m={err_dx} err_dy_m={err_dy} err_planar_m={err_planar}"
         )
@@ -734,6 +949,7 @@ class LeaderEstimator(Node):
                 lines = [
                     f"state={state} conf={self.last_det_conf:.2f} latency_ms={self.last_latency_ms:.1f}",
                     f"est_range={self.last_range_used_m:.2f}m src={self.last_range_source} bearing={self.last_bearing_used_deg:.1f}deg",
+                    f"cam_orient_src={self.last_camera_orientation_source}",
                     f"heading_src={self.last_heading_source}",
                 ]
                 lines.extend(self._detection_status_overlay_lines(self.get_clock().now()))
@@ -758,12 +974,14 @@ class LeaderEstimator(Node):
         self.last_reject_reason = "none"
         self.last_debug_state = "INIT"
         self.last_debug_det = det
+        self._publish_selected_target(now, det)
 
         if self.camera_model is None:
             self.last_det_conf = -1.0
             self.last_range_source = "none"
             self.last_range_used_m = -1.0
             self.last_heading_source = "none"
+            self.last_camera_orientation_source = "static"
             self.publish_status_msg(self._status_line("STALE", "camera_info_missing", now))
             self._record_fault("STALE", "camera_info_missing", now)
             self._publish_debug_image("STALE", det)
@@ -773,6 +991,7 @@ class LeaderEstimator(Node):
             self.last_range_source = "none"
             self.last_range_used_m = -1.0
             self.last_heading_source = "none"
+            self.last_camera_orientation_source = "static"
             self.publish_status_msg(self._status_line("STALE", "image_stale", now))
             self._record_fault("STALE", "image_stale", now)
             self._publish_debug_image("STALE", det)
@@ -782,6 +1001,7 @@ class LeaderEstimator(Node):
             self.last_range_source = "none"
             self.last_range_used_m = -1.0
             self.last_heading_source = "none"
+            self.last_camera_orientation_source = "static"
             self.publish_status_msg(self._status_line("STALE", "uav_pose_stale", now))
             self._record_fault("STALE", "uav_pose_stale", now)
             self._publish_debug_image("STALE", det)
@@ -791,6 +1011,7 @@ class LeaderEstimator(Node):
             self.last_range_source = "none"
             self.last_range_used_m = -1.0
             self.last_heading_source = "none"
+            self.last_camera_orientation_source = "static"
             reason = "no_detection" if self.last_external_det_stamp is not None else "detection_missing"
             self.publish_status_msg(self._status_line("NO_DET", reason, now))
             self._record_fault("NO_DET", reason, now)

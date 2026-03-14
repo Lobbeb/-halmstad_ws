@@ -16,7 +16,10 @@ Recommended tmux workflow:
 - start YOLO mode with `./run.sh tmux_1to1 warehouse mode:=yolo`
 - start YOLO tracker mode with `./run.sh tmux_1to1 warehouse mode:=yolo tracker:=true`
 - record a YOLO run with `./run.sh tmux_1to1 warehouse mode:=yolo record:=true`
+- record a lightweight YOLO Step 2/3 run with `./run.sh tmux_1to1 warehouse mode:=yolo record:=true record_profile:=step2_light`
+  - this is the recommended small proof bag for Step 2, Step 3, the estimator phase, the follow-point phase, the planner phase, and the harder-case hardening phase because it records the raw selected-target, filtered selected-target, estimator, follow-point, planned-target, bridge, and downstream actuation topics without images
 - record a YOLO vision run with `./run.sh tmux_1to1 warehouse mode:=yolo record:=true record_profile:=vision`
+  - use this when you also need camera/debug image proof
 - speed up sim time with `./run.sh tmux_1to1 warehouse rtf:=2.0`
 - pass a custom YOLO weight with `./run.sh tmux_1to1 warehouse mode:=yolo weights:=yolo26v2.pt`
 - enable truth-assisted YOLO testing with `./run.sh tmux_1to1 warehouse mode:=yolo use_estimate:=false`
@@ -305,10 +308,42 @@ Add image topics too:
 ./run.sh tmux_1to1 warehouse mode:=yolo record:=true record_profile:=vision
 ```
 
+Small Step 2/3 proof bag:
+
+```bash
+./run.sh tmux_1to1 warehouse mode:=yolo record:=true record_profile:=step2_light
+```
+
+Recommended Step 2 proof run:
+
+```bash
+./run.sh tmux_1to1 warehouse gui:=true mode:=yolo tracker:=true obb:=false weights:=warehouse_v1-v2-yolo26n.pt use_estimate:=false start_visual_follow_controller:=true record:=true record_profile:=vision delay_s:=12
+```
+
+Recommended planner-enabled bridge run:
+
+```bash
+./run.sh tmux_1to1 warehouse gui:=true mode:=yolo tracker:=true obb:=true weights:=warehouse-v1-yolo26n-obb.pt use_estimate:=false start_visual_follow_planner:=true start_visual_actuation_bridge:=true record:=true record_profile:=step2_light record_tag:=planner_phase delay_s:=12
+```
+
+Use this stable bridge mode first when validating planner behavior:
+- `use_estimate:=false` keeps the planner + bridge audit focused on the filter/estimator/follow-point/planner/bridge path instead of mixing in extra estimate-driven camera instability too early
+- current tuned defaults reduce area-mode forward aggressiveness, allow smaller yaw corrections to reach the body, and decay commands faster on short loss / no-distance cases
+- `leader_estimator` now uses live camera tilt/yaw topics when available:
+  - `/<uav>/follow/actual/tilt_deg`
+  - `/<uav>/camera/actual/world_yaw_rad`
+- recent stable bridge proof runs meaningfully exercised projected range in this mode, so this remains the recommended projected-range validation command
+- recent stable planner proof runs showed:
+  - `follow_point_generator` active and publishing consistently
+  - `follow_point_planner` active and publishing consistently
+  - `visual_actuation_bridge` consuming `active_input=planned_target`
+  - bounded motion through the planner-backed world-frame target
+
 Direct recorder wrapper:
 
 ```bash
 ./run.sh record_experiment warehouse mode:=yolo profile:=vision
+./run.sh record_experiment warehouse mode:=yolo profile:=step2_light
 ```
 
 Default recorder output:
@@ -328,12 +363,46 @@ Recorder topic groups:
   - `/<uav>/follow/error/xy_distance_m`
   - `/<uav>/follow/error/yaw_rad`
 - YOLO mode adds:
+  - `/coord/leader_detection`
+  - `/coord/leader_detection_status`
   - `/coord/leader_estimate`
   - `/coord/leader_estimate_status`
   - `/coord/leader_estimate_error`
+  - `/coord/leader_selected_target`
+  - `/coord/leader_selected_target_filtered`
+  - `/coord/leader_selected_target_filtered_status`
+  - `/coord/leader_visual_target_estimate`
+  - `/coord/leader_visual_target_estimate_status`
+  - `/coord/leader_follow_point`
+  - `/coord/leader_follow_point_status`
+  - `/coord/leader_planned_target`
+  - `/coord/leader_planned_target_status`
+  - `/coord/leader_visual_control`
+  - `/coord/leader_visual_control_status`
+- `profile:=step2_light` records only:
+  - `/clock`
+  - `/coord/events`
+  - `/coord/leader_detection_status`
+  - `/coord/leader_selected_target`
+  - `/coord/leader_selected_target_filtered`
+  - `/coord/leader_selected_target_filtered_status`
+  - `/coord/leader_visual_target_estimate`
+  - `/coord/leader_visual_target_estimate_status`
+  - `/coord/leader_follow_point`
+  - `/coord/leader_follow_point_status`
+  - `/coord/leader_planned_target`
+  - `/coord/leader_planned_target_status`
+  - `/coord/leader_visual_control`
+  - `/coord/leader_visual_control_status`
+  - `/coord/leader_visual_actuation_bridge_status`
+  - `/<uav>/psdk_ros2/flight_control_setpoint_ENUposition_yaw`
+  - `/<uav>/pose_cmd`
+  - `/<uav>/pose`
 - `profile:=vision` also adds:
   - `/<uav>/camera0/image_raw`
   - `/<uav>/camera0/camera_info`
+  - `/coord/leader_debug_image`
+  - `/coord/leader_visual_control_debug_image`
 
 ## Capture Images For Datasets
 
@@ -421,6 +490,178 @@ Live follow control works here too:
 ```bash
 ./run.sh follow_control
 ```
+
+Optional Step 2 visual-follow test output:
+
+```bash
+./run.sh 1to1_yolo warehouse start_visual_follow_controller:=true
+./run.sh tmux_1to1 warehouse gui:=false mode:=yolo start_visual_follow_controller:=true
+```
+
+This keeps the current estimate-follow path untouched and additionally publishes a structured test command on `/coord/leader_visual_control`.
+The estimator also publishes the clean controller-facing selected target on `/coord/leader_selected_target`.
+The Step 3 trust/smoothing layer republishes the controller input on `/coord/leader_selected_target_filtered`.
+The Sensors-inspired estimator-upgrade stage publishes the camera-relative control state on `/coord/leader_visual_target_estimate`.
+Readable controller status is mirrored on `/coord/leader_visual_control_status`.
+The visual test controller:
+- prefers `/coord/leader_visual_target_estimate` as the controller-facing input
+- keeps `/coord/leader_selected_target_filtered` for debug/fallback only
+- consumes a camera-relative relative-state estimate built from projected range when valid, otherwise area-derived pseudo-range
+- does not command the UAV directly
+
+Planner-enabled visual-follow ownership:
+
+```bash
+./run.sh 1to1_yolo warehouse tracker:=true obb:=true weights:=warehouse-v1-yolo26n-obb.pt use_estimate:=false start_visual_follow_planner:=true start_visual_actuation_bridge:=true
+./run.sh tmux_1to1 warehouse gui:=true mode:=yolo tracker:=true obb:=true weights:=warehouse-v1-yolo26n-obb.pt use_estimate:=false start_visual_follow_planner:=true start_visual_actuation_bridge:=true
+```
+
+When `start_visual_follow_planner:=true` together with `start_visual_actuation_bridge:=true`:
+- the filtered-target + visual-target-estimator + follow-point pipeline starts automatically
+- the planner stage starts automatically on top of that follow-point pipeline
+- the old `follow_uav` / `follow_uav_odom` motion owner is disabled
+- `visual_actuation_bridge` becomes the active motion owner
+- `follow_point_generator` publishes a world-frame spatial goal on `/coord/leader_follow_point`
+- `follow_point_generator` now prefers `/coord/leader_estimate` XY and yaw as the primary behind-target anchor, so the UAV shadows the UGV pose instead of circling the camera-relative target projection
+- `follow_point_planner` publishes a planned world-frame pose target on `/coord/leader_planned_target`
+- the bridge consumes that planned target as the active upstream motion objective
+- the bridge converts the planned target into the existing pose-like ENU command interface on `/<uav>/psdk_ros2/flight_control_setpoint_ENUposition_yaw`
+- the bridge also mirrors `/<uav>/pose_cmd` for existing camera/debug consumers
+
+Direct reactive controller mode remains available:
+- `start_visual_follow_controller:=true` without `start_visual_follow_point_generator:=true`
+- in that mode the bridge consumes `/coord/leader_visual_control` directly
+
+Direct follow-point mode remains available:
+- `start_visual_follow_point_generator:=true start_visual_actuation_bridge:=true`
+- in that mode the bridge consumes `/coord/leader_follow_point` directly without the planner stage
+
+Current planner validation note:
+- the stable `use_estimate:=false` bridge path is now the recommended tuning baseline
+- recent tuned proof runs improved closed-loop stability and reduced forward overshoot in that mode
+- recent stable-mode projected-range proof runs entered `range_src=ground` and produced finite upgraded range estimates
+- direct `range <-> area` flapping was not observed in the projected-range proof bag
+- projected-range behavior is still not fully characterized for harder estimate-driven runs, so keep that distinction clear
+- the current estimator-backed phase is also validated in that same stable mode:
+  - `visual_target_estimator` stayed alive in the active control path
+  - `visual_follow_controller` spent most of the run in `distance_mode=estimate`
+  - fallback to the old direct filtered-target path remained rare
+  - bridge-enabled motion stayed bounded and recoverable
+- the current planner phase is also minimally validated in that same stable mode:
+  - `follow_point_generator` stayed active upstream
+  - `follow_point_planner` stayed active
+  - bridge status reported `active_input=planned_target` in the meaningful motion portion of the proof run
+  - `/coord/leader_planned_target` and `/<uav>/pose_cmd` were published consistently
+  - raw follow points moved in larger jumps while the planner clamped planned-target jumps to a smaller bounded step
+  - UAV motion stayed bounded while the bridge followed the planned spatial goal
+
+Useful checks:
+
+```bash
+ros2 topic echo /coord/leader_selected_target
+ros2 topic echo /coord/leader_selected_target_filtered_status
+ros2 topic echo /coord/leader_selected_target_filtered
+ros2 topic echo /coord/leader_visual_target_estimate_status
+ros2 topic echo /coord/leader_visual_target_estimate
+ros2 topic echo /coord/leader_follow_point_status
+ros2 topic echo /coord/leader_follow_point
+ros2 topic echo /coord/leader_planned_target_status
+ros2 topic echo /coord/leader_planned_target
+ros2 topic echo /coord/leader_visual_control_status
+ros2 topic echo /coord/leader_visual_control
+ros2 topic echo /coord/leader_visual_actuation_bridge_status
+ros2 topic echo /dji0/psdk_ros2/flight_control_setpoint_ENUposition_yaw
+ros2 topic echo /dji0/pose_cmd
+```
+
+Current stable proof command for the planner phase:
+
+```bash
+./run.sh tmux_1to1 warehouse gui:=true mode:=yolo tracker:=true obb:=true weights:=warehouse-v1-yolo26n-obb.pt use_estimate:=false start_visual_follow_planner:=true start_visual_actuation_bridge:=true record:=true record_profile:=step2_light record_tag:=planner_phase delay_s:=12
+```
+
+Harder estimate-driven planner probe:
+
+```bash
+./run.sh tmux_1to1 warehouse gui:=true mode:=yolo tracker:=true obb:=true weights:=warehouse-v1-yolo26n-obb.pt use_estimate:=true use_actual_heading:=false start_visual_follow_planner:=true start_visual_actuation_bridge:=true record:=true record_profile:=step2_light record_tag:=planner_estimate_fix delay_s:=12
+```
+
+What that harder probe currently means:
+- the planner no longer holds stale planned targets forever; short-loss `HOLD` now times out cleanly into `INVALID`
+- in this harder mode, the main remaining weakness is upstream perception/estimate availability rather than planner ownership
+- recent proof stats showed detector `NO_DET` dominating, with filtered target / visual-target estimate mostly `INVALID`
+- so the planner path itself is behaving more honestly now, but the less-assisted visual regime still needs runtime hardening
+
+Current harder-case hardening proof:
+
+```bash
+./run.sh tmux_1to1 warehouse gui:=true mode:=yolo tracker:=true obb:=true weights:=warehouse-v1-yolo26n-obb.pt use_estimate:=true use_actual_heading:=false start_visual_follow_planner:=true start_visual_actuation_bridge:=true record:=true record_profile:=step2_light record_tag:=robustness_hardening3 delay_s:=12
+```
+
+What changed in that hardening pass:
+- `selected_target_filter` now allows bounded low-confidence reacquire from very recent plausible history instead of always dropping to invalid on those weak returns
+- `camera_tracker` now keeps the last trackable leader pose alive briefly so camera pan does not freeze instantly on short estimator dropouts
+- the tuned defaults now give the filter/estimator slightly longer short-gap prediction windows
+
+What that harder proof showed relative to the earlier `planner_estimate_fix` bag:
+- filtered target `VALID`: `64 -> 92`
+- visual-target estimate `MEASURED+PREDICTED`: `73 -> 110`
+- follow-point `ACTIVE+HOLD`: `91 -> 130`
+- planner `ACTIVE+HOLD`: `126 -> 167`
+- bridge `ACTIVE`: `123 -> 167`
+- bridge `active_input=planned_target`: `143 -> 180`
+- bridge `active_input=control`: `378 -> 193`
+
+What that means:
+- the current visual stack now survives short ugly segments better in the harder estimate-driven mode
+- the planner-backed path stays active materially longer before falling back to stale-control hold
+- the remaining weakness is now more clearly real visibility / geometry loss in close-range or under-UAV scenes, not a stale planner hold bug or immediate short-loss collapse
+
+Latest shadow-follow hardening proof:
+
+```bash
+./run.sh tmux_1to1 warehouse gui:=true mode:=yolo tracker:=true obb:=true weights:=warehouse-v1-yolo26n-obb.pt camera:=detached use_estimate:=true use_actual_heading:=false start_visual_follow_planner:=true start_visual_actuation_bridge:=true record:=true record_profile:=step2_light record_tag:=shadow_follow_fix3 delay_s:=12
+```
+
+What changed in that shadow-follow pass:
+- `follow_point_generator` now keeps a recent behind-target heading briefly when motion weakens, instead of relying only on the UAV-to-target view line
+- `follow_point_generator` also prefers the estimator's world-frame target pose and yaw as the primary behind-target anchor in the stable planner-backed path
+- follow-point, planner, and bridge progression are all more conservative so the UAV shadows more slowly
+- bridge `input_mode=auto` is now safe:
+  - it uses `planned_target`, then `follow_point`
+  - otherwise it holds
+  - it no longer falls back silently to raw controller commands
+
+What that proof showed:
+- bridge `active_input=control`: `193 -> 0`
+- bridge `active_input=planned_target`: `180 -> 126`
+- bridge mean `step_xy_m`: `0.1097 -> 0.0649`
+- UAV XY path length over the proof window: `41.26 m -> 15.11 m`
+
+What that means:
+- the hard no-odom-style path is still not finished, because visibility / close-range geometry loss still exists upstream
+- but the planner-backed path now degrades much more safely instead of flying off on a lower-level fallback when the visual chain weakens
+
+Current stable behind-target note:
+- the stable `use_estimate:=false` planner-backed path now prefers the estimated UGV world pose as the follow-point anchor
+- when that anchor is fresh, `/coord/leader_follow_point_status` reports `policy_mode=target_pose_heading`
+- planner and bridge still stay on the same planned-target pipeline above it
+- if the upstream target estimate drops out, the follow-point stage can still go through short `HOLD` / `INVALID`, so the remaining problem is still upstream availability rather than the behind-target policy itself
+
+Stable planner-backed path recovery:
+
+- after the shadow-follow safety hardening, the stable `use_estimate:=false` path briefly regressed because:
+  - `uav_simulator` could starve `/<uav>/pose` while detached-camera pose-service futures stayed pending
+  - `leader_estimator` was treating detections as stale based on source-frame stamp rather than receive freshness
+- both were fixed:
+  - `uav_simulator` now keeps publishing `/<uav>/pose` and clears stuck detached-camera pose futures after a short timeout
+  - `leader_estimator` now gates detection freshness on receive time while still reporting source latency
+- with those fixes, the stable planner command again produces active:
+  - selected-target / estimate flow
+  - follow-point generation
+  - planner output
+  - bridge output
+  - visible UAV motion
 
 Runtime turn analysis:
 
@@ -762,6 +1003,24 @@ This creates:
 - `publish_camera_debug_topics:=true|false`
   - default `false` in `./run.sh 1to1_yolo`
   - enable `/<uav>/camera/target/*`
+- `start_visual_follow_controller:=true|false`
+  - default `false`
+  - enable the optional `/coord/leader_visual_control*` Step 2 test output without changing UAV actuation
+- `start_visual_actuation_bridge:=true|false`
+  - default `false`
+  - enable the bridge that makes the visual-follow path the active real UAV motion owner
+- `leader_selected_target_topic:=...`
+  - default `/coord/leader_selected_target`
+  - override the raw selected-target topic published by the estimator if needed
+- `leader_selected_target_filtered_topic:=...`
+  - default `/coord/leader_selected_target_filtered`
+  - override the Step 3 filtered selected-target topic if needed
+- `leader_selected_target_filtered_status_topic:=...`
+  - default `/coord/leader_selected_target_filtered_status`
+  - override the Step 3 filtered-target status topic if needed
+- `leader_visual_actuation_bridge_status_topic:=...`
+  - default `/coord/leader_visual_actuation_bridge_status`
+  - override the bridge status topic if needed
 - `tracker:=true|false`
   - default `false`
   - `true` switches `external_detection_node:=tracker`

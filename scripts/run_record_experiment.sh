@@ -47,7 +47,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [world] [mode:=follow|yolo] [uav_name:=dji0] [profile:=default|vision] [tag:=name] [out:=bags/experiments/...] [dry_run:=true|false]" >&2
+      echo "Usage: $0 [world] [mode:=follow|yolo] [uav_name:=dji0] [profile:=default|step2_light|vision] [tag:=name] [out:=bags/experiments/...] [dry_run:=true|false]" >&2
       exit 2
       ;;
   esac
@@ -63,13 +63,19 @@ case "$MODE" in
 esac
 
 case "$PROFILE" in
-  default|vision)
+  default|step2_light|vision)
     ;;
   *)
     echo "Invalid profile: $PROFILE" >&2
+    echo "Use profile:=default, profile:=step2_light, or profile:=vision" >&2
     exit 2
     ;;
 esac
+
+if [ "$PROFILE" = "step2_light" ] && [ "$MODE" != "yolo" ]; then
+  echo "profile:=step2_light requires mode:=yolo" >&2
+  exit 2
+fi
 
 case "$DRY_RUN" in
   true|false)
@@ -107,29 +113,68 @@ METADATA_FILE="$RUN_DIR_ABS/metadata.json"
 TOPICS=(
   "/clock"
   "/coord/events"
-  "/a201_0000/amcl_pose_odom"
-  "/$UAV_NAME/pose"
-  "/$UAV_NAME/pose_cmd"
-  "/$UAV_NAME/pose_cmd/odom"
-  "/$UAV_NAME/camera/actual/center_pose"
-  "/$UAV_NAME/camera/target/center_pose"
-  "/$UAV_NAME/follow/target/anchor_pose"
-  "/$UAV_NAME/follow/error/xy_distance_m"
-  "/$UAV_NAME/follow/error/yaw_rad"
 )
 
-if [ "$MODE" = "yolo" ]; then
+if [ "$PROFILE" = "step2_light" ]; then
   TOPICS+=(
-    "/coord/leader_estimate"
-    "/coord/leader_estimate_status"
-    "/coord/leader_estimate_error"
+    "/coord/leader_detection_status"
+    "/coord/leader_selected_target"
+    "/coord/leader_selected_target_filtered"
+    "/coord/leader_selected_target_filtered_status"
+    "/coord/leader_visual_target_estimate"
+    "/coord/leader_visual_target_estimate_status"
+    "/coord/leader_follow_point"
+    "/coord/leader_follow_point_status"
+    "/coord/leader_planned_target"
+    "/coord/leader_planned_target_status"
+    "/coord/leader_visual_control"
+    "/coord/leader_visual_control_status"
+    "/coord/leader_visual_actuation_bridge_status"
+    "/$UAV_NAME/psdk_ros2/flight_control_setpoint_ENUposition_yaw"
+    "/$UAV_NAME/pose_cmd"
+    "/$UAV_NAME/pose"
   )
+else
+  TOPICS+=(
+    "/a201_0000/amcl_pose_odom"
+    "/$UAV_NAME/pose"
+    "/$UAV_NAME/pose_cmd"
+    "/$UAV_NAME/pose_cmd/odom"
+    "/$UAV_NAME/camera/actual/center_pose"
+    "/$UAV_NAME/camera/target/center_pose"
+    "/$UAV_NAME/follow/target/anchor_pose"
+    "/$UAV_NAME/follow/error/xy_distance_m"
+    "/$UAV_NAME/follow/error/yaw_rad"
+  )
+
+  if [ "$MODE" = "yolo" ]; then
+    TOPICS+=(
+      "/coord/leader_detection"
+      "/coord/leader_detection_status"
+      "/coord/leader_estimate"
+      "/coord/leader_estimate_status"
+      "/coord/leader_estimate_error"
+      "/coord/leader_selected_target"
+      "/coord/leader_selected_target_filtered"
+      "/coord/leader_selected_target_filtered_status"
+      "/coord/leader_visual_target_estimate"
+      "/coord/leader_visual_target_estimate_status"
+      "/coord/leader_follow_point"
+      "/coord/leader_follow_point_status"
+      "/coord/leader_planned_target"
+      "/coord/leader_planned_target_status"
+      "/coord/leader_visual_control"
+      "/coord/leader_visual_control_status"
+    )
+  fi
 fi
 
 if [ "$PROFILE" = "vision" ]; then
   TOPICS+=(
     "/$UAV_NAME/camera0/image_raw"
     "/$UAV_NAME/camera0/camera_info"
+    "/coord/leader_debug_image"
+    "/coord/leader_visual_control_debug_image"
   )
 fi
 

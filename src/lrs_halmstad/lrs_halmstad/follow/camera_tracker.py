@@ -83,6 +83,7 @@ class CameraTracker(Node):
         self.declare_parameter("uav_pose_cmd_topic", "")
         self.declare_parameter("tick_hz", 10.0)
         self.declare_parameter("pose_timeout_s", 3.0)
+        self.declare_parameter("trackable_hold_timeout_s", 0.40)
         self.declare_parameter("camera_x_offset_m", 0.0)
         self.declare_parameter("camera_y_offset_m", 0.0)
         self.declare_parameter("camera_z_offset_m", 0.27)
@@ -120,6 +121,9 @@ class CameraTracker(Node):
         self.uav_pose_cmd_topic = str(self.get_parameter("uav_pose_cmd_topic").value).strip()
         self.tick_hz = max(1.0, float(self.get_parameter("tick_hz").value))
         self.pose_timeout_s = float(self.get_parameter("pose_timeout_s").value)
+        self.trackable_hold_timeout_s = max(
+            0.0, float(self.get_parameter("trackable_hold_timeout_s").value)
+        )
         self.camera_x_offset_m = float(self.get_parameter("camera_x_offset_m").value)
         self.camera_y_offset_m = float(self.get_parameter("camera_y_offset_m").value)
         self.camera_z_offset_m = float(self.get_parameter("camera_z_offset_m").value)
@@ -165,6 +169,7 @@ class CameraTracker(Node):
         self.last_leader_status_stamp: Optional[Time] = None
         self.last_trackable_leader_pose: Optional[Pose2D] = None
         self.last_trackable_leader_z: Optional[float] = None
+        self.last_trackable_leader_stamp: Optional[Time] = None
         self.last_detection: Optional[Detection2D] = None
         self.last_detection_stamp: Optional[Time] = None
         self.camera_fx: Optional[float] = None
@@ -503,6 +508,17 @@ class CameraTracker(Node):
         # trackable gate to avoid yaw swings from weak estimates.
         return self.leader_pose_is_fresh(now)
 
+    def last_trackable_pose_is_fresh(self, now: Time) -> bool:
+        if (
+            self.last_trackable_leader_pose is None
+            or self.last_trackable_leader_z is None
+            or self.last_trackable_leader_stamp is None
+            or self.trackable_hold_timeout_s <= 0.0
+        ):
+            return False
+        age_s = (now - self.last_trackable_leader_stamp).nanoseconds * 1e-9
+        return age_s <= self.trackable_hold_timeout_s
+
     def _prefer_uav_cmd_pose(self, now: Time) -> bool:
         return should_prefer_command_pose(
             have_cmd=self.have_uav_cmd,
@@ -821,6 +837,10 @@ class CameraTracker(Node):
                 self.leader_pose.yaw,
             )
             self.last_trackable_leader_z = float(self.leader_z)
+            self.last_trackable_leader_stamp = now
+            tracked_leader_pose = self.last_trackable_leader_pose
+            tracked_leader_z = self.last_trackable_leader_z
+        elif self.last_trackable_pose_is_fresh(now):
             tracked_leader_pose = self.last_trackable_leader_pose
             tracked_leader_z = self.last_trackable_leader_z
         if leader_tilt_trackable:

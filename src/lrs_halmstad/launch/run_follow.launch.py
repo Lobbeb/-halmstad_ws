@@ -52,22 +52,28 @@ def _external_ugv_condition():
 
 def _leader_odom_condition():
     leader_mode = LaunchConfiguration('leader_mode')
+    start_bridge = LaunchConfiguration('start_visual_actuation_bridge')
     return IfCondition(
         PythonExpression([
             "'",
             leader_mode,
-            "'.lower() == 'odom'",
+            "'.lower() == 'odom' and '",
+            start_bridge,
+            "'.lower() not in ('1','true','yes','on')",
         ])
     )
 
 
 def _leader_nonodom_condition():
     leader_mode = LaunchConfiguration('leader_mode')
+    start_bridge = LaunchConfiguration('start_visual_actuation_bridge')
     return IfCondition(
         PythonExpression([
             "'",
             leader_mode,
-            "'.lower() != 'odom'",
+            "'.lower() != 'odom' and '",
+            start_bridge,
+            "'.lower() not in ('1','true','yes','on')",
         ])
     )
 
@@ -84,6 +90,83 @@ def _external_perception_condition(node_name: str):
             "'.lower() == '",
             node_name.lower(),
             "'",
+        ])
+    )
+
+
+def _visual_pipeline_condition():
+    start_visual = LaunchConfiguration('start_visual_follow_controller')
+    start_follow_point = LaunchConfiguration('start_visual_follow_point_generator')
+    start_planner = LaunchConfiguration('start_visual_follow_planner')
+    start_bridge = LaunchConfiguration('start_visual_actuation_bridge')
+    return IfCondition(
+        PythonExpression([
+            "(",
+            "'",
+            start_visual,
+            "'.lower() in ('1','true','yes','on')",
+            ") or (",
+            "'",
+            start_follow_point,
+            "'.lower() in ('1','true','yes','on')",
+            ") or (",
+            "'",
+            start_planner,
+            "'.lower() in ('1','true','yes','on')",
+            ") or (",
+            "'",
+            start_bridge,
+            "'.lower() in ('1','true','yes','on')",
+            ")",
+        ])
+    )
+
+
+def _visual_controller_condition():
+    start_visual = LaunchConfiguration('start_visual_follow_controller')
+    start_bridge = LaunchConfiguration('start_visual_actuation_bridge')
+    start_follow_point = LaunchConfiguration('start_visual_follow_point_generator')
+    start_planner = LaunchConfiguration('start_visual_follow_planner')
+    return IfCondition(
+        PythonExpression([
+            "(",
+            "'",
+            start_visual,
+            "'.lower() in ('1','true','yes','on')",
+            ") or (",
+            "'",
+            start_bridge,
+            "'.lower() in ('1','true','yes','on') and '",
+            start_follow_point,
+            "'.lower() not in ('1','true','yes','on') and '",
+            start_planner,
+            "'.lower() not in ('1','true','yes','on')",
+            ")",
+        ])
+    )
+
+
+def _follow_point_generator_condition():
+    start_follow_point = LaunchConfiguration('start_visual_follow_point_generator')
+    start_planner = LaunchConfiguration('start_visual_follow_planner')
+    return IfCondition(
+        PythonExpression([
+            "'",
+            start_follow_point,
+            "'.lower() in ('1','true','yes','on') or '",
+            start_planner,
+            "'.lower() in ('1','true','yes','on')",
+        ])
+    )
+
+
+def _follow_planner_condition():
+    start_planner = LaunchConfiguration('start_visual_follow_planner')
+    return IfCondition(
+        PythonExpression([
+            "'",
+            start_planner,
+            "'.lower() in ('1','true','yes','on')",
         ])
     )
 
@@ -116,6 +199,10 @@ def _default_world_value(
 
 def _bool_param(name: str) -> ParameterValue:
     return ParameterValue(LaunchConfiguration(name), value_type=bool)
+
+
+def _launch_flag_enabled(context, name: str) -> bool:
+    return LaunchConfiguration(name).perform(context).strip().lower() in ('1', 'true', 'yes', 'on')
 
 
 def _optional_bool_from_launch(context, name: str):
@@ -160,6 +247,38 @@ def _build_camera_tracker_node(context, *args, **kwargs):
             parameters=[
                 LaunchConfiguration('params_file'),
                 camera_params,
+            ],
+        )
+    ]
+
+
+def _build_visual_actuation_bridge_node(context, *args, **kwargs):
+    if not _launch_flag_enabled(context, 'start_visual_actuation_bridge'):
+        return []
+    input_mode = 'auto'
+    if _launch_flag_enabled(context, 'start_visual_follow_planner'):
+        input_mode = 'planned_target'
+    elif _launch_flag_enabled(context, 'start_visual_follow_point_generator'):
+        input_mode = 'follow_point'
+    elif _launch_flag_enabled(context, 'start_visual_follow_controller'):
+        input_mode = 'control'
+    return [
+        Node(
+            package='lrs_halmstad',
+            executable='visual_actuation_bridge',
+            name='visual_actuation_bridge',
+            output='screen',
+            parameters=[
+                LaunchConfiguration('params_file'),
+                {
+                    'uav_name': LaunchConfiguration('uav_name'),
+                    'input_mode': ParameterValue(input_mode, value_type=str),
+                    'visual_control_topic': LaunchConfiguration('leader_visual_control_topic'),
+                    'follow_point_topic': LaunchConfiguration('leader_follow_point_topic'),
+                    'planned_target_topic': LaunchConfiguration('leader_planned_target_topic'),
+                    'uav_pose_topic': LaunchConfiguration('leader_uav_pose_topic'),
+                    'status_topic': LaunchConfiguration('leader_visual_actuation_bridge_status_topic'),
+                },
             ],
         )
     ]
@@ -279,9 +398,81 @@ def generate_launch_description():
         'external_detection_topic',
         default_value='/coord/leader_detection',
     )
+    leader_selected_target_topic_arg = DeclareLaunchArgument(
+        'leader_selected_target_topic',
+        default_value='/coord/leader_selected_target',
+    )
+    leader_selected_target_filtered_topic_arg = DeclareLaunchArgument(
+        'leader_selected_target_filtered_topic',
+        default_value='/coord/leader_selected_target_filtered',
+    )
+    leader_selected_target_filtered_status_topic_arg = DeclareLaunchArgument(
+        'leader_selected_target_filtered_status_topic',
+        default_value='/coord/leader_selected_target_filtered_status',
+    )
+    leader_visual_target_estimate_topic_arg = DeclareLaunchArgument(
+        'leader_visual_target_estimate_topic',
+        default_value='/coord/leader_visual_target_estimate',
+    )
+    leader_visual_target_estimate_status_topic_arg = DeclareLaunchArgument(
+        'leader_visual_target_estimate_status_topic',
+        default_value='/coord/leader_visual_target_estimate_status',
+    )
+    start_visual_follow_point_generator_arg = DeclareLaunchArgument(
+        'start_visual_follow_point_generator',
+        default_value='false',
+        description='Start the follow-point generator stage that turns the estimator-backed target state into a spatial follow goal',
+    )
+    start_visual_follow_planner_arg = DeclareLaunchArgument(
+        'start_visual_follow_planner',
+        default_value='false',
+        description='Start the planner stage that smooths the follow point into a planned pose target for the bridge',
+    )
+    leader_follow_point_topic_arg = DeclareLaunchArgument(
+        'leader_follow_point_topic',
+        default_value='/coord/leader_follow_point',
+    )
+    leader_follow_point_status_topic_arg = DeclareLaunchArgument(
+        'leader_follow_point_status_topic',
+        default_value='/coord/leader_follow_point_status',
+    )
+    leader_planned_target_topic_arg = DeclareLaunchArgument(
+        'leader_planned_target_topic',
+        default_value='/coord/leader_planned_target',
+    )
+    leader_planned_target_status_topic_arg = DeclareLaunchArgument(
+        'leader_planned_target_status_topic',
+        default_value='/coord/leader_planned_target_status',
+    )
+    start_visual_follow_controller_arg = DeclareLaunchArgument(
+        'start_visual_follow_controller',
+        default_value='false',
+        description='Start the optional image-space visual follow test controller',
+    )
+    start_visual_actuation_bridge_arg = DeclareLaunchArgument(
+        'start_visual_actuation_bridge',
+        default_value='false',
+        description='Start the optional bridge that converts visual-follow commands into the existing UAV actuation path',
+    )
+    leader_visual_control_topic_arg = DeclareLaunchArgument(
+        'leader_visual_control_topic',
+        default_value='/coord/leader_visual_control',
+    )
+    leader_visual_control_status_topic_arg = DeclareLaunchArgument(
+        'leader_visual_control_status_topic',
+        default_value='/coord/leader_visual_control_status',
+    )
+    leader_visual_actuation_bridge_status_topic_arg = DeclareLaunchArgument(
+        'leader_visual_actuation_bridge_status_topic',
+        default_value='/coord/leader_visual_actuation_bridge_status',
+    )
     leader_image_topic_arg = DeclareLaunchArgument(
         'leader_image_topic',
         default_value=['/', LaunchConfiguration('uav_name'), '/camera0/image_raw'],
+    )
+    leader_camera_actual_pose_topic_arg = DeclareLaunchArgument(
+        'leader_camera_actual_pose_topic',
+        default_value=['/', LaunchConfiguration('uav_name'), '/camera/actual/center_pose'],
     )
     leader_camera_info_topic_arg = DeclareLaunchArgument(
         'leader_camera_info_topic',
@@ -390,10 +581,104 @@ def generate_launch_description():
                 'leader_actual_pose_topic': LaunchConfiguration('leader_actual_pose_topic'),
                 'leader_actual_pose_enable': _bool_param('leader_actual_pose_enable'),
                 'external_detection_topic': LaunchConfiguration('external_detection_topic'),
+                'selected_target_topic': LaunchConfiguration('leader_selected_target_topic'),
                 'event_topic': LaunchConfiguration('event_topic'),
             },
         ],
     )
+
+    selected_target_filter_node = Node(
+        package='lrs_halmstad',
+        executable='selected_target_filter',
+        name='selected_target_filter',
+        output='screen',
+        condition=_visual_pipeline_condition(),
+        parameters=[
+            LaunchConfiguration('params_file'),
+            {
+                'in_topic': LaunchConfiguration('leader_selected_target_topic'),
+                'out_topic': LaunchConfiguration('leader_selected_target_filtered_topic'),
+                'status_topic': LaunchConfiguration('leader_selected_target_filtered_status_topic'),
+            },
+        ],
+    )
+
+    visual_target_estimator_node = Node(
+        package='lrs_halmstad',
+        executable='visual_target_estimator',
+        name='visual_target_estimator',
+        output='screen',
+        condition=_visual_pipeline_condition(),
+        parameters=[
+            LaunchConfiguration('params_file'),
+            {
+                'uav_name': LaunchConfiguration('uav_name'),
+                'selected_target_topic': LaunchConfiguration('leader_selected_target_filtered_topic'),
+                'camera_info_topic': LaunchConfiguration('leader_camera_info_topic'),
+                'out_topic': LaunchConfiguration('leader_visual_target_estimate_topic'),
+                'status_topic': LaunchConfiguration('leader_visual_target_estimate_status_topic'),
+            },
+        ],
+    )
+
+    follow_point_generator_node = Node(
+        package='lrs_halmstad',
+        executable='follow_point_generator',
+        name='follow_point_generator',
+        output='screen',
+        condition=_follow_point_generator_condition(),
+        parameters=[
+            LaunchConfiguration('params_file'),
+            {
+                'uav_name': LaunchConfiguration('uav_name'),
+                'target_estimate_topic': LaunchConfiguration('leader_visual_target_estimate_topic'),
+                'uav_pose_topic': LaunchConfiguration('leader_uav_pose_topic'),
+                'camera_pose_topic': LaunchConfiguration('leader_camera_actual_pose_topic'),
+                'out_topic': LaunchConfiguration('leader_follow_point_topic'),
+                'status_topic': LaunchConfiguration('leader_follow_point_status_topic'),
+            },
+        ],
+    )
+
+    follow_point_planner_node = Node(
+        package='lrs_halmstad',
+        executable='follow_point_planner',
+        name='follow_point_planner',
+        output='screen',
+        condition=_follow_planner_condition(),
+        parameters=[
+            LaunchConfiguration('params_file'),
+            {
+                'uav_name': LaunchConfiguration('uav_name'),
+                'follow_point_topic': LaunchConfiguration('leader_follow_point_topic'),
+                'uav_pose_topic': LaunchConfiguration('leader_uav_pose_topic'),
+                'out_topic': LaunchConfiguration('leader_planned_target_topic'),
+                'status_topic': LaunchConfiguration('leader_planned_target_status_topic'),
+            },
+        ],
+    )
+
+    visual_follow_controller_node = Node(
+        package='lrs_halmstad',
+        executable='visual_follow_controller',
+        name='visual_follow_controller',
+        output='screen',
+        condition=_visual_controller_condition(),
+        parameters=[
+            LaunchConfiguration('params_file'),
+            {
+                'uav_name': LaunchConfiguration('uav_name'),
+                'camera_topic': LaunchConfiguration('leader_image_topic'),
+                'camera_info_topic': LaunchConfiguration('leader_camera_info_topic'),
+                'selected_target_topic': LaunchConfiguration('leader_selected_target_filtered_topic'),
+                'target_estimate_topic': LaunchConfiguration('leader_visual_target_estimate_topic'),
+                'out_topic': LaunchConfiguration('leader_visual_control_topic'),
+                'status_topic': LaunchConfiguration('leader_visual_control_status_topic'),
+            },
+        ],
+    )
+
+    visual_actuation_bridge_node = OpaqueFunction(function=_build_visual_actuation_bridge_node)
 
     follow_odom_node = Node(
         package='lrs_halmstad',
@@ -542,7 +827,24 @@ def generate_launch_description():
         external_detection_enable_arg,
         external_detection_node_arg,
         external_detection_topic_arg,
+        leader_selected_target_topic_arg,
+        leader_selected_target_filtered_topic_arg,
+        leader_selected_target_filtered_status_topic_arg,
+        leader_visual_target_estimate_topic_arg,
+        leader_visual_target_estimate_status_topic_arg,
+        start_visual_follow_point_generator_arg,
+        start_visual_follow_planner_arg,
+        leader_follow_point_topic_arg,
+        leader_follow_point_status_topic_arg,
+        leader_planned_target_topic_arg,
+        leader_planned_target_status_topic_arg,
+        start_visual_follow_controller_arg,
+        start_visual_actuation_bridge_arg,
+        leader_visual_control_topic_arg,
+        leader_visual_control_status_topic_arg,
+        leader_visual_actuation_bridge_status_topic_arg,
         leader_image_topic_arg,
+        leader_camera_actual_pose_topic_arg,
         leader_camera_info_topic_arg,
         leader_depth_topic_arg,
         leader_uav_pose_topic_arg,
@@ -560,6 +862,12 @@ def generate_launch_description():
         detector_node,
         tracker_node,
         estimator_node,
+        selected_target_filter_node,
+        visual_target_estimator_node,
+        follow_point_generator_node,
+        follow_point_planner_node,
+        visual_follow_controller_node,
+        visual_actuation_bridge_node,
         follow_odom_node,
         follow_estimate_node,
         camera_tracker_node,

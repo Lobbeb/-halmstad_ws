@@ -38,6 +38,7 @@ class Simulator(Node):
         self.declare_parameter("gimbal_pitch_max_rad", 0.7854)
         self.declare_parameter("sync_detached_camera_pose", True)
         self.declare_parameter("publish_legacy_debug_topics", False)
+        self.declare_parameter("set_pose_future_timeout_s", 0.5)
 
         self.frame_id = "odom"
         self.world = self.get_parameter("world").value
@@ -58,6 +59,7 @@ class Simulator(Node):
         self.gimbal_pitch_max = float(self.get_parameter("gimbal_pitch_max_rad").value)
         self.sync_detached_camera_pose = bool(self.get_parameter("sync_detached_camera_pose").value)
         self.publish_legacy_debug_topics = bool(self.get_parameter("publish_legacy_debug_topics").value)
+        self.set_pose_future_timeout_s = max(0.0, float(self.get_parameter("set_pose_future_timeout_s").value))
         if self.camera_mode == "integrated":
             self.camera_mode = "integrated_joint"
         if self.camera_mode == "detached":
@@ -91,6 +93,8 @@ class Simulator(Node):
         self.target_pan = self.pan
         self.future1 = None
         self.future2 = None
+        self.future1_sent_ns = None
+        self.future2_sent_ns = None
 
         self.cli = self.create_client(SetEntityPose, f'/world/{self.gz_world}/set_pose', callback_group=self.group)
         print(f"WAIT for service: /world/{self.gz_world}/set_pose'")
@@ -281,6 +285,21 @@ class Simulator(Node):
                 self.world_position.z = float(self.update_msg.axes[2])
                 self.yaw = float(self.update_msg.axes[3])
             self.update_msg = None
+
+    def _future_pending(self, future, sent_ns):
+        if future is None:
+            return False
+        if future.done():
+            return False
+        if sent_ns is None:
+            return True
+        age_s = (self.get_clock().now().nanoseconds - int(sent_ns)) * 1e-9
+        if self.set_pose_future_timeout_s > 0.0 and age_s > self.set_pose_future_timeout_s:
+            self.get_logger().warn(
+                f"SetEntityPose future timed out after {age_s:.2f}s; clearing pending request"
+            )
+            return False
+        return True
             
     def timer_callback(self):
         try:
@@ -288,25 +307,40 @@ class Simulator(Node):
             x = self.world_position.x
             y = self.world_position.y
             z = self.world_position.z
+            pose_future_pending = self._future_pending(self.future1, self.future1_sent_ns)
+            camera_future_pending = self._future_pending(self.future2, self.future2_sent_ns)
+            if not pose_future_pending and self.future1 is not None and self.future1.done():
+                self.future1 = None
+                self.future1_sent_ns = None
+            elif not pose_future_pending and self.future1 is not None and not self.future1.done():
+                self.future1 = None
+                self.future1_sent_ns = None
+            if not camera_future_pending and self.future2 is not None and self.future2.done():
+                self.future2 = None
+                self.future2_sent_ns = None
+            elif not camera_future_pending and self.future2 is not None and not self.future2.done():
+                self.future2 = None
+                self.future2_sent_ns = None
+
             if (
                 self.camera_mode == "detached_model"
                 and self.sync_detached_camera_pose
-                and ((self.future1 is not None and not self.future1.done()) or
-                     (self.future2 is not None and not self.future2.done()))
+                and (pose_future_pending or camera_future_pending)
             ):
-                return
-            self.set_pose(self.name, x, y, z, self.yaw)
-            if self.camera_mode == "detached_model":
-                self.set_camera_model_pose(x, y, z, self.pan, self.tilt)
+                pass
             else:
-                pitchmsg = Float64()
-                pitchmsg.data = self._clamp(
-                    -math.radians(self.tilt), self.gimbal_pitch_min, self.gimbal_pitch_max
-                )
-                self.gimbal_pitch_pub.publish(pitchmsg)
-                yawmsg = Float64()
-                yawmsg.data = math.radians(self.pan)
-                self.gimbal_yaw_pub.publish(yawmsg)
+                self.set_pose(self.name, x, y, z, self.yaw)
+                if self.camera_mode == "detached_model":
+                    self.set_camera_model_pose(x, y, z, self.pan, self.tilt)
+                else:
+                    pitchmsg = Float64()
+                    pitchmsg.data = self._clamp(
+                        -math.radians(self.tilt), self.gimbal_pitch_min, self.gimbal_pitch_max
+                    )
+                    self.gimbal_pitch_pub.publish(pitchmsg)
+                    yawmsg = Float64()
+                    yawmsg.data = math.radians(self.pan)
+                    self.gimbal_yaw_pub.publish(yawmsg)
             now_msg = self.get_clock().now().to_msg()
             quat = quaternion_from_euler(0.0, 0.0, self.yaw)
             msg = PoseStamped()
@@ -390,6 +424,7 @@ class Simulator(Node):
             robot_request.pose.orientation.w = quat1[3]
             ## print(robot_request)
             self.future1 = self.cli.call_async(robot_request)
+            self.future1_sent_ns = self.get_clock().now().nanoseconds
             #rclpy.spin_until_future_complete(self, future1)
             #print(future1.result())
         except Exception as ex:
@@ -412,6 +447,7 @@ class Simulator(Node):
             camera_request.pose.orientation.z = quat2[2]
             camera_request.pose.orientation.w = quat2[3]
             self.future2 = self.cli.call_async(camera_request)
+            self.future2_sent_ns = self.get_clock().now().nanoseconds
         except Exception as ex:
             print("Exception set_camera_model_pose:", ex, type(ex))
 

@@ -137,12 +137,12 @@ for arg in "$@"; do
     follow_yaw:=*|pan_enable:=*|use_tilt:=*|tilt_enable:=*|camera_default_tilt_deg:=*|use_actual_heading:=*|leader_actual_heading_enable:=*|leader_actual_heading_topic:=*|leader_actual_pose_enable:=*|publish_follow_debug_topics:=*|publish_pose_cmd_topics:=*|publish_camera_debug_topics:=*)
       FOLLOW_ARGS+=("$arg")
       ;;
-    weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*|tracker:=*|external_detection_node:=*|tracker_config:=*)
+    weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*|tracker:=*|external_detection_node:=*|tracker_config:=*|start_visual_follow_controller:=*|start_visual_follow_point_generator:=*|start_visual_follow_planner:=*|start_visual_actuation_bridge:=*|leader_selected_target_topic:=*|leader_selected_target_filtered_topic:=*|leader_selected_target_filtered_status_topic:=*|leader_visual_target_estimate_topic:=*|leader_visual_target_estimate_status_topic:=*|leader_follow_point_topic:=*|leader_follow_point_status_topic:=*|leader_planned_target_topic:=*|leader_planned_target_status_topic:=*|leader_visual_control_topic:=*|leader_visual_control_status_topic:=*|leader_visual_actuation_bridge_status_topic:=*)
       FOLLOW_ARGS+=("$arg")
       ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [world] [mode:=follow|yolo] [record:=true|false] [record_profile:=default|vision] [record_tag:=name] [record_out:=bags/experiments/...] [camera:=detached|attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [use_actual_heading:=true|false] [leader_actual_pose_enable:=true|false] [publish_follow_debug_topics:=true|false] [publish_pose_cmd_topics:=true|false] [publish_camera_debug_topics:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [obb:=true|false] [tracker:=true|false] [external_detection_node:=detector|tracker] [tracker_config:=botsort.yaml] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [rtf:=1.0] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [record_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes]" >&2
+      echo "Usage: $0 [world] [mode:=follow|yolo] [record:=true|false] [record_profile:=default|step2_light|vision] [record_tag:=name] [record_out:=bags/experiments/...] [camera:=detached|attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [use_actual_heading:=true|false] [leader_actual_pose_enable:=true|false] [publish_follow_debug_topics:=true|false] [publish_pose_cmd_topics:=true|false] [publish_camera_debug_topics:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [obb:=true|false] [tracker:=true|false] [external_detection_node:=detector|tracker] [tracker_config:=botsort.yaml] [start_visual_follow_controller:=true|false] [start_visual_follow_point_generator:=true|false] [start_visual_follow_planner:=true|false] [start_visual_actuation_bridge:=true|false] [leader_selected_target_topic:=...] [leader_selected_target_filtered_topic:=...] [leader_selected_target_filtered_status_topic:=...] [leader_visual_target_estimate_topic:=...] [leader_visual_target_estimate_status_topic:=...] [leader_follow_point_topic:=...] [leader_follow_point_status_topic:=...] [leader_planned_target_topic:=...] [leader_planned_target_status_topic:=...] [leader_visual_control_topic:=...] [leader_visual_control_status_topic:=...] [leader_visual_actuation_bridge_status_topic:=...] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [rtf:=1.0] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [record_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes]" >&2
       exit 2
       ;;
   esac
@@ -161,7 +161,7 @@ esac
 if [ "$MODE" != "yolo" ]; then
   for arg in "${FOLLOW_ARGS[@]}"; do
     case "$arg" in
-      weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*|tracker:=*|external_detection_node:=*|tracker_config:=*)
+      weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*|tracker:=*|external_detection_node:=*|tracker_config:=*|start_visual_follow_controller:=*|start_visual_follow_point_generator:=*|start_visual_follow_planner:=*|start_visual_actuation_bridge:=*|leader_selected_target_topic:=*|leader_selected_target_filtered_topic:=*|leader_selected_target_filtered_status_topic:=*|leader_visual_target_estimate_topic:=*|leader_visual_target_estimate_status_topic:=*|leader_follow_point_topic:=*|leader_follow_point_status_topic:=*|leader_planned_target_topic:=*|leader_planned_target_status_topic:=*|leader_visual_control_topic:=*|leader_visual_control_status_topic:=*|leader_visual_actuation_bridge_status_topic:=*)
         echo "Argument '$arg' requires mode:=yolo" >&2
         exit 2
         ;;
@@ -194,14 +194,19 @@ case "$RECORD" in
 esac
 
 case "$RECORD_PROFILE" in
-  default|vision)
+  default|step2_light|vision)
     ;;
   *)
     echo "Invalid record_profile: $RECORD_PROFILE" >&2
-    echo "Use record_profile:=default or record_profile:=vision" >&2
+    echo "Use record_profile:=default, record_profile:=step2_light, or record_profile:=vision" >&2
     exit 2
     ;;
 esac
+
+if [ "$RECORD_PROFILE" = "step2_light" ] && [ "$MODE" != "yolo" ]; then
+  echo "record_profile:=step2_light requires mode:=yolo" >&2
+  exit 2
+fi
 fi
 
 case "$LAYOUT" in
