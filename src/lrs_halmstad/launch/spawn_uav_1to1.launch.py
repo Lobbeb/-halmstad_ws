@@ -24,7 +24,7 @@ def generate_launch_description():
     uav_mode_arg = DeclareLaunchArgument('uav_mode', default_value='teleport')
     x_arg = DeclareLaunchArgument(
         'x',
-        default_value='-2.0',
+        default_value='-7.0',
     )
     y_arg = DeclareLaunchArgument(
         'y',

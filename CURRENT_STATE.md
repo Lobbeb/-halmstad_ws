@@ -291,7 +291,8 @@ Current live focus in YOLO detect/track follow:
 - estimator/follow behavior is much better than earlier, but close-range behavior is still the main problem
 - the UAV can struggle when the UGV passes underneath or tries to cross the UAV path
 - the estimator can still end up holding the fallback/const range at the wrong moment
-- body yaw on sharp turns / reversing and jumpy camera pan/tilt are the active runtime tuning/debug areas
+- body yaw on sharp turns / reversing is the active runtime tuning/debug area
+- camera gimbal motion is now smooth (rate-limited, relaxed boot); jumpy pan/tilt from `set_pose` snap-back is resolved
 
 Where to start:
 - `follow/follow_uav.py`
@@ -327,13 +328,31 @@ Current validated baseline:
 - `pan_enable: true`
 - `tilt_enable: true`
 - `default_pan_deg: 0.0`
-- `default_tilt_deg: -45.0`
+- `default_tilt_deg: 0.0`
 - `uav_xy_command_mode: controller_step`
 - `uav_xy_command_step_scale: 0.6`
 
 Important consequence:
 - `camera:=attached` / `uav_camera_mode:=integrated_joint` is now the default baseline
 - detached camera mode is no longer available in simulation
+
+Gimbal boot behavior:
+
+- `uav_simulator` now boots **relaxed**: no gimbal joint commands are published until the first `/update_pan` or `/update_tilt` message arrives
+- the gimbal rests at its SDF-default position (joint angle 0) until the follow stack or a manual command arms it
+- on the first command, the simulator jumps its internal current position to the commanded value (no spurious ramp from 0)
+- subsequent commands use rate-limited stepping: `pan_rate_deg_s: 90.0`, `tilt_rate_deg_s: 60.0`
+- these rates are `ros__parameters`-settable on the `uav_simulator` node
+
+Camera bridge:
+
+- image topics (`/image`, `/camera_info`, `/depth_image`) bridge is now **Gazebo→ROS only** (`[` notation) instead of bidirectional `@`
+- reduces startup frame buffering artifacts in image viewers
+
+Camera update rate:
+
+- `camera_update_rate` spawn arg is now correctly wired through to the SDF/xacro (bug fix: it was declared in `generate_sdf.py` but never added to xacro mappings, so it always defaulted to 30 Hz regardless of the arg passed)
+- pass at spawn time: `./run.sh spawn_uav warehouse camera_update_rate:=10`
 
 Attached gimbal rollback path:
 - the current visible-gimbal workaround lives in:
@@ -481,7 +500,6 @@ Things that should not be "fixed back":
 - do not add tracker logic into `leader_detector.py`
 - keep predictor/tracker/estimator as separate concerns
 - do not remove `clock_guard` unless the backward-jump problem is proven fixed
-- do not treat attached camera mode as the default baseline
 
 ### Current Loose Ends
 

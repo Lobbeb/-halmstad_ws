@@ -152,7 +152,7 @@ This sends `Ctrl-c` in this order:
 - Gazebo
 - spawn is expected to exit automatically when Gazebo goes down
 
-Then it waits a few seconds, kills the tmux session, performs a safety cleanup pass for leftover Gazebo / launch processes, and clears stale helper state files under `/tmp/halmstad_ws`.
+Then it waits a few seconds, kills the tmux session, performs a safety cleanup pass for leftover Gazebo / launch / `ros_gz_bridge` processes, and clears stale helper state files under `/tmp/halmstad_ws`.
 If recording was enabled, the stop flow also stops the recorder pane and cleans up matching `ros2 bag record` processes as fallback.
 
 Useful stop overrides:
@@ -175,6 +175,8 @@ Current baseline:
 - current camera defaults are `pan_enable: true` and `tilt_enable: true`
 - current XY body-command mode is `uav_xy_command_mode:=controller_step` with `uav_xy_command_step_scale:=0.6`
 - detached camera mode has been removed from simulation
+- gimbal boots relaxed: no joint commands are sent until the follow stack (or a manual command) sends the first `update_pan` / `update_tilt`; motion is rate-limited at 90 °/s pan, 60 °/s tilt
+- camera image bridge is Gazebo→ROS only; set `camera_update_rate:=10` at spawn time if RTF is low (e.g. WSL2)
 - if you override the mount pitch for attached mode, pass the same value to follow:
 
 ```bash

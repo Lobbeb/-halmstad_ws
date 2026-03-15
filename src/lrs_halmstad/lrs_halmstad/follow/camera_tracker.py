@@ -600,7 +600,14 @@ class CameraTracker(Node):
             self.camera_y_offset_m,
         )
         target_x, target_y, _ = self._leader_look_target_xyz_for(leader_pose, leader_z)
-        target_yaw = math.atan2(target_y - camera_y, target_x - camera_x)
+        dx = target_x - camera_x
+        dy = target_y - camera_y
+        if math.hypot(dx, dy) < 0.5:
+            # Target is nearly directly below — atan2 becomes numerically unstable at
+            # small horizontal distances.  Hold the last pan command rather than
+            # generating a large, noisy jump.
+            return self.last_pan_cmd_deg if self.last_pan_cmd_deg is not None else self.default_pan_deg
+        target_yaw = math.atan2(dy, dx)
         # Pan command is the raw residual from current UAV yaw to target yaw.
         # The simulator applies camera_pan_sign and camera_yaw_offset_deg when
         # converting this command into the rendered camera pose.

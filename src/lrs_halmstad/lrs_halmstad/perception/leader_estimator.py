@@ -91,11 +91,8 @@ class LeaderEstimator(Node):
         self.depth_patch_min_valid_px = max(1, int(yaml_param(self, "depth_patch_min_valid_px", descriptor=dyn_num)))
         self.depth_min_m = float(yaml_param(self, "depth_min_m", descriptor=dyn_num))
         self.depth_max_m = float(yaml_param(self, "depth_max_m", descriptor=dyn_num))
-        self.depth_ground_max_delta_m = float(yaml_param(self, "depth_ground_max_delta_m", descriptor=dyn_num))
         self.depth_max_estimate_jump_m = float(yaml_param(self, "depth_max_estimate_jump_m", descriptor=dyn_num))
         self.target_ground_z_m = float(yaml_param(self, "target_ground_z_m", descriptor=dyn_num))
-        self.ground_min_range_m = float(yaml_param(self, "ground_min_range_m", descriptor=dyn_num))
-        self.ground_max_range_m = float(yaml_param(self, "ground_max_range_m", descriptor=dyn_num))
 
         self.cam_yaw_offset_rad = math.radians(float(yaml_param(self, "cam_yaw_offset_deg", descriptor=dyn_num)))
         self.cam_pitch_offset_rad = math.radians(float(yaml_param(self, "cam_pitch_offset_deg", descriptor=dyn_num)))
@@ -120,8 +117,8 @@ class LeaderEstimator(Node):
             raise ValueError("leader_actual_pose_timeout_s must be > 0")
         if self.constant_range_m <= 0.0 and self.d_target <= 0.0:
             raise ValueError("either d_target or constant_range_m must be > 0")
-        if self.range_mode not in ("auto", "depth", "ground", "const"):
-            raise ValueError("range_mode must be one of: auto, depth, ground, const")
+        if self.range_mode not in ("auto", "depth", "const"):
+            raise ValueError("range_mode must be one of: auto, depth, const")
 
         self.camera_model: Optional[CameraModel] = None
         self.uav_pose: Optional[Pose2D] = None
@@ -435,16 +432,9 @@ class LeaderEstimator(Node):
         x: float,
         y: float,
         depth_range: float,
-        ground_range: Optional[float],
         now: Time,
         track_id: Optional[int],
     ) -> str:
-        if (
-            ground_range is not None
-            and self.depth_ground_max_delta_m > 0.0
-            and abs(depth_range - ground_range) > self.depth_ground_max_delta_m
-        ):
-            return "depth_ground_mismatch"
         if self.depth_max_estimate_jump_m <= 0.0:
             return "none"
         if self.last_estimate_pose is None or self.last_estimate_stamp is None:
@@ -464,47 +454,6 @@ class LeaderEstimator(Node):
             return "depth_jump"
         return "none"
 
-    def _ground_projection_pixel(self, det: Detection2D) -> Tuple[float, float]:
-        if det.obb_corners is not None and len(det.obb_corners) == 4:
-            try:
-                ordered = self._order_quad(np.asarray(det.obb_corners, dtype=np.float64))
-                bottom_edge_idx = max(
-                    range(4),
-                    key=lambda idx: float(ordered[idx, 1] + ordered[(idx + 1) % 4, 1]),
-                )
-                p1 = ordered[bottom_edge_idx]
-                p2 = ordered[(bottom_edge_idx + 1) % 4]
-                return (0.5 * float(p1[0] + p2[0]), 0.5 * float(p1[1] + p2[1]))
-            except Exception:
-                pass
-        try:
-            x1, _, x2, y2 = det.bbox
-            return (0.5 * float(x1 + x2), float(y2))
-        except Exception:
-            return (float(det.u), float(det.v))
-
-    def _ground_range_from_pixel(self, u: float, v: float, cam: CameraModel) -> Optional[float]:
-        assert self.uav_pose is not None
-        x_n = (u - cam.cx) / cam.fx
-        y_n = (v - cam.cy) / cam.fy
-        # Image Y grows downward, but the ground-projection elevation convention
-        # here uses negative angles for rays that point downward.
-        pitch_img = math.atan2(-y_n, math.sqrt(1.0 + x_n * x_n))
-        cam_world_z = self.uav_pose.z + self.cam_z_offset_m
-        dz = self.target_ground_z_m - cam_world_z
-        elev = self.cam_pitch_offset_rad + pitch_img
-        tan_elev = math.tan(elev)
-        if abs(tan_elev) < 1e-3:
-            return None
-        horiz_range = dz / tan_elev
-        if not math.isfinite(horiz_range) or horiz_range <= 0.0:
-            return None
-        if horiz_range < self.ground_min_range_m:
-            return None
-        if self.ground_max_range_m > 0.0 and horiz_range > self.ground_max_range_m:
-            return None
-        return float(horiz_range)
-
     @staticmethod
     def _order_quad(points: np.ndarray) -> np.ndarray:
         return order_quad(points)
@@ -519,8 +468,6 @@ class LeaderEstimator(Node):
         x_n = (u - cam.cx) / cam.fx
         y_n = (v - cam.cy) / cam.fy
         bearing = self.cam_yaw_offset_rad - math.atan2(x_n, 1.0)
-        # Keep the ground-point solver consistent with _ground_range_from_pixel:
-        # lower image rows must point the ray farther downward, not upward.
         pitch_img = math.atan2(-y_n, math.sqrt(1.0 + x_n * x_n))
         cam_world_z = self.uav_pose.z + self.cam_z_offset_m
         dz = self.target_ground_z_m - cam_world_z
@@ -567,25 +514,6 @@ class LeaderEstimator(Node):
         yaw_b = self._unwrap_angle_near(yaw_b, self.prev_heading_yaw)
         return yaw_a if abs(yaw_a - self.prev_heading_yaw) <= abs(yaw_b - self.prev_heading_yaw) else yaw_b
 
-    def _ground_reject_reason(self, x: float, y: float, now: Time, track_id: Optional[int]) -> str:
-        if self.last_estimate_pose is None or self.last_estimate_stamp is None:
-            return "none"
-        age_s = max(0.0, (now - self.last_estimate_stamp).nanoseconds * 1e-9)
-        freshness_window_s = max(self.external_detection_timeout_s, self.image_timeout_s, self.uav_pose_timeout_s)
-        if age_s > freshness_window_s:
-            return "none"
-        if (
-            track_id is not None
-            and self.last_estimate_track_id is not None
-            and track_id != self.last_estimate_track_id
-        ):
-            return "none"
-        jump_m = math.hypot(x - self.last_estimate_pose.x, y - self.last_estimate_pose.y)
-        max_jump_m = 3.0 + 2.0 * age_s
-        if jump_m > max_jump_m:
-            return "ground_jump"
-        return "none"
-
     def _constant_target_range(self) -> tuple[float, str]:
         if self.d_target > 0.0:
             vertical_delta = 0.0
@@ -599,24 +527,7 @@ class LeaderEstimator(Node):
         center_x_n = (det.u - cam.cx) / cam.fx
         center_bearing = self.cam_yaw_offset_rad - math.atan2(center_x_n, 1.0)
         depth_range = self._depth_range_at(det, now)
-        ground_u: Optional[float] = None
-        ground_v: Optional[float] = None
-        ground_range: Optional[float] = None
-        ground_bearing: Optional[float] = None
-        reject_reason = "none"
         cam_world_x, cam_world_y = self._cam_world_xy()
-        if self.range_mode in ("ground", "auto"):
-            ground_u, ground_v = self._ground_projection_pixel(det)
-            ground_x_n = (ground_u - cam.cx) / cam.fx
-            ground_bearing = self.cam_yaw_offset_rad - math.atan2(ground_x_n, 1.0)
-            ground_range = self._ground_range_from_pixel(ground_u, ground_v, cam)
-            if ground_range is not None and ground_bearing is not None:
-                ground_x = cam_world_x + ground_range * math.cos(self.uav_pose.yaw + ground_bearing)
-                ground_y = cam_world_y + ground_range * math.sin(self.uav_pose.yaw + ground_bearing)
-                reject_reason = self._ground_reject_reason(ground_x, ground_y, now, det.track_id)
-                if reject_reason != "none":
-                    ground_range = None
-                    ground_bearing = None
         depth_reject_reason = "none"
         if depth_range is not None:
             depth_x = cam_world_x + depth_range * math.cos(self.uav_pose.yaw + center_bearing)
@@ -625,7 +536,6 @@ class LeaderEstimator(Node):
                 depth_x,
                 depth_y,
                 depth_range,
-                ground_range,
                 now,
                 det.track_id,
             )
@@ -636,27 +546,16 @@ class LeaderEstimator(Node):
                 raise ValueError(depth_reject_reason if depth_reject_reason != "none" else "depth_range_invalid")
             range_m = depth_range
             range_source = "depth"
-        elif self.range_mode == "ground":
-            if ground_range is None:
-                self.last_reject_reason = reject_reason
-                raise ValueError(reject_reason if reject_reason != "none" else "ground_range_invalid")
-            range_m = ground_range
-            range_source = "ground"
         elif self.range_mode == "const":
             range_m, range_source = self._constant_target_range()
-        else:
-            if depth_reject_reason != "none" and reject_reason == "none":
-                reject_reason = depth_reject_reason
+        else:  # auto: prefer depth, fall back to const
             if depth_range is not None:
                 range_m = depth_range
                 range_source = "depth"
-            elif ground_range is not None:
-                range_m = ground_range
-                range_source = "ground"
             else:
                 range_m, range_source = self._constant_target_range()
 
-        bearing = ground_bearing if range_source == "ground" and ground_bearing is not None else center_bearing
+        bearing = center_bearing
         x = cam_world_x + range_m * math.cos(self.uav_pose.yaw + bearing)
         y = cam_world_y + range_m * math.sin(self.uav_pose.yaw + bearing)
 
