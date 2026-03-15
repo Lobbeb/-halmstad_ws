@@ -576,7 +576,7 @@ class LeaderEstimator(Node):
         self.last_range_used_m = float(range_m)
         self.last_bearing_used_deg = math.degrees(bearing)
         self.last_heading_source = heading_source
-        self.last_reject_reason = reject_reason
+        self.last_reject_reason = depth_reject_reason
         return Pose2D(x=x, y=y, z=self.target_ground_z_m, yaw=yaw), range_source
 
     def _publish_estimate(self, pose: Pose2D, now: Time, track_id: Optional[int]) -> None:

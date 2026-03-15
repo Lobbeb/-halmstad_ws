@@ -38,8 +38,8 @@ class Simulator(Node):
         self.declare_parameter("gimbal_pitch_min_rad", -1.5708)
         self.declare_parameter("gimbal_pitch_max_rad", 0.7854)
         self.declare_parameter("publish_legacy_debug_topics", False)
-        self.declare_parameter("pan_rate_deg_s", 45.0)
-        self.declare_parameter("tilt_rate_deg_s", 45.0)
+        yaml_param(self, "pan_rate_deg_s")
+        yaml_param(self, "tilt_rate_deg_s")
 
         self.frame_id = "odom"
         self.world = self.get_parameter("world").value

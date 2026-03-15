@@ -602,7 +602,7 @@ class CameraTracker(Node):
         target_x, target_y, _ = self._leader_look_target_xyz_for(leader_pose, leader_z)
         dx = target_x - camera_x
         dy = target_y - camera_y
-        if math.hypot(dx, dy) < 0.5:
+        if math.hypot(dx, dy) < 0.25:
             # Target is nearly directly below — atan2 becomes numerically unstable at
             # small horizontal distances.  Hold the last pan command rather than
             # generating a large, noisy jump.
