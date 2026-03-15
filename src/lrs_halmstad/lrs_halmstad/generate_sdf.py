@@ -81,6 +81,7 @@ class GenSdf(Node):
             mappings["model_static"] = "true" if self.model_static else "false"
             mappings["base_link_kinematic"] = "true" if self.base_link_kinematic else "false"
             mappings["camera_pitch_offset"] = f'{self.camera_pitch_offset_deg}'
+            mappings["camera_update_rate"] = f'{self.camera_update_rate}'
             if self.with_camera:
                 mappings["with_camera"] = "true"
             else:

@@ -64,6 +64,11 @@ def generate_launch_description():
         default_value="45.0",
         description='Attached camera mount pitch offset in degrees',
     )
+    camera_update_rate_arg = DeclareLaunchArgument(
+        name='camera_update_rate',
+        default_value="30",
+        description='Camera sensor update rate in Hz',
+    )
     camera_name_arg = DeclareLaunchArgument(name='camera_name', default_value="camera0",
                                             description='Attached camera name')
 
@@ -122,7 +127,8 @@ def generate_launch_description():
                     " -p model_static:=", model_static_for_mode,
                     " -p base_link_kinematic:=", base_link_kinematic_for_mode,
                     " -p camera_pitch_offset_deg:=", LaunchConfiguration('camera_pitch_offset_deg'),
-                    " -p camera_name:=", LaunchConfiguration('camera_name')
+                    " -p camera_name:=", LaunchConfiguration('camera_name'),
+                    " -p camera_update_rate:=", LaunchConfiguration('camera_update_rate')
                 ]),
                 '-x', LaunchConfiguration('x'),
                 '-y', LaunchConfiguration('y'),
@@ -139,11 +145,11 @@ def generate_launch_description():
         executable='parameter_bridge',
         arguments=[
             ['/', LaunchConfiguration('name'), '/', LaunchConfiguration('camera_name'),
-             '/image@sensor_msgs/msg/Image@ignition.msgs.Image'],
+             '/image@sensor_msgs/msg/Image[ignition.msgs.Image'],
             ['/', LaunchConfiguration('name'), '/', LaunchConfiguration('camera_name'),
-             '/camera_info@sensor_msgs/msg/CameraInfo@ignition.msgs.CameraInfo'],
+             '/camera_info@sensor_msgs/msg/CameraInfo[ignition.msgs.CameraInfo'],
             ['/', LaunchConfiguration('name'), '/', LaunchConfiguration('camera_name'),
-             '/depth_image@sensor_msgs/msg/Image@ignition.msgs.Image'],
+             '/depth_image@sensor_msgs/msg/Image[ignition.msgs.Image'],
         ],
         remappings=[
             (
@@ -192,6 +198,7 @@ def generate_launch_description():
         bridge_camera_arg,
         bridge_gimbal_arg,
         camera_pitch_offset_deg_arg,
+        camera_update_rate_arg,
         camera_name_arg,
         model_arg,
         world_arg,        

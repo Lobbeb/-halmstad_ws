@@ -85,7 +85,7 @@ follow_uav:
 #--------------<< Camera Tracker <<--------------------------------------------------------------------------------------
 camera_tracker:
   ros__parameters:
-    camera_look_target_z_m: 0.3  # DONT TOUCH! Vertical offset above the leader target point for pan/tilt solving.
+    camera_look_target_z_m: 0.0  # DONT TOUCH! Vertical offset above the leader target point for pan/tilt solving.
     default_pan_deg: 0.0        # Fallback pan command when pan tracking is disabled or stale.
     default_tilt_deg: -45.0    # Fallback tilt command when tracking is disabled or stale.
     pan_enable: true          # Publish tracked pan commands instead of holding default_pan_deg.
@@ -98,7 +98,7 @@ camera_tracker:
     tilt_image_center_max_deg: 12.0  # Clamp image-based tilt correction so it cannot dominate geometry tilt.
     publish_debug_topics: true  # Publish /<uav>/camera0/{target,debug}/* camera geometry and image-centering topics.
     pose_timeout_s: 3.0    # Treat leader/UAV pose data as stale after this many seconds.
-    tick_hz: 30.0         # Camera pan/tilt update rate.
+    tick_hz: 10.0         # Camera pan/tilt update rate.
 
 leader_detector:
   ros__parameters:

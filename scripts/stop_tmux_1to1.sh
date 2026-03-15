@@ -200,6 +200,7 @@ run_fallback_cleanup() {
   signal_processes_by_pattern "localization launch" 'ros2 launch clearpath_nav2_demos localization\.launch\.py' || true
   signal_processes_by_pattern "spawn launch" 'ros2 launch lrs_halmstad spawn_uav_1to1\.launch\.py' || true
   signal_processes_by_pattern "Gazebo launch" 'ros2 launch lrs_halmstad managed_clearpath_sim\.launch\.py' || true
+  signal_processes_by_pattern "ros_gz_bridge" 'ros_gz_bridge/parameter_bridge' || true
   signal_processes_by_pattern "Gazebo sim" '(^|/)gz sim($| )' || true
 }
 

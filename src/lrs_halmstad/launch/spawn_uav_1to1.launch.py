@@ -37,6 +37,7 @@ def generate_launch_description():
     camera_name_arg = DeclareLaunchArgument('camera_name', default_value='camera0')
     uav_camera_mode_arg = DeclareLaunchArgument('uav_camera_mode', default_value='integrated_joint')
     camera_pitch_offset_deg_arg = DeclareLaunchArgument('camera_pitch_offset_deg', default_value='45.0')
+    camera_update_rate_arg = DeclareLaunchArgument('camera_update_rate', default_value='30')
     share_dir = get_package_share_directory('lrs_halmstad')
     gz_world = _gazebo_world_name(LaunchConfiguration('world'))
 
@@ -51,6 +52,7 @@ def generate_launch_description():
             'bridge_camera': 'true',
             'bridge_gimbal': 'true',
             'camera_pitch_offset_deg': LaunchConfiguration('camera_pitch_offset_deg'),
+            'camera_update_rate': LaunchConfiguration('camera_update_rate'),
             'camera_name': LaunchConfiguration('camera_name'),
             'x': LaunchConfiguration('x'),
             'y': LaunchConfiguration('y'),
@@ -77,6 +79,7 @@ def generate_launch_description():
         camera_name_arg,
         uav_camera_mode_arg,
         camera_pitch_offset_deg_arg,
+        camera_update_rate_arg,
         set_pose_bridge,
         uav_spawn,
     ])

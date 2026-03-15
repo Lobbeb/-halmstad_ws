@@ -38,6 +38,8 @@ class Simulator(Node):
         self.declare_parameter("gimbal_pitch_min_rad", -1.5708)
         self.declare_parameter("gimbal_pitch_max_rad", 0.7854)
         self.declare_parameter("publish_legacy_debug_topics", False)
+        self.declare_parameter("pan_rate_deg_s", 90.0)
+        self.declare_parameter("tilt_rate_deg_s", 45.0)
 
         self.frame_id = "odom"
         self.world = self.get_parameter("world").value
@@ -57,6 +59,8 @@ class Simulator(Node):
         self.gimbal_pitch_min = float(self.get_parameter("gimbal_pitch_min_rad").value)
         self.gimbal_pitch_max = float(self.get_parameter("gimbal_pitch_max_rad").value)
         self.publish_legacy_debug_topics = bool(self.get_parameter("publish_legacy_debug_topics").value)
+        self.pan_rate_deg_s = float(self.get_parameter("pan_rate_deg_s").value)
+        self.tilt_rate_deg_s = float(self.get_parameter("tilt_rate_deg_s").value)
         if self.camera_mode == "integrated":
             self.camera_mode = "integrated_joint"
         if self.camera_mode != "integrated_joint":
@@ -82,11 +86,13 @@ class Simulator(Node):
 
         self.yaw = math.radians(float(self.get_parameter("start_yaw_deg").value))
         self.update_msg = None
-        self.tilt = -45.0
+        self.tilt = 0.0
         self.pan = 0.0
-        self.target_tilt = self.tilt
-        self.target_pan = self.pan
+        self.target_tilt = None  # None until first command received; no gimbal output until then
+        self.target_pan = None
         self.future1 = None
+        self._last_set_pose = None  # (x, y, z, yaw) — skip set_pose when unchanged
+        self._last_tick_time = None
 
         self.cli = self.create_client(SetEntityPose, f'/world/{self.gz_world}/set_pose', callback_group=self.group)
         print(f"WAIT for service: /world/{self.gz_world}/set_pose'")
@@ -262,12 +268,23 @@ class Simulator(Node):
         self.update_msg = msg
 
     def update_pan_callback(self, msg):
-        self.target_pan = float(msg.data)
-        self.pan = float(msg.data)
-        
+        new_pan = float(msg.data)
+        if self.target_pan is None:
+            self.pan = new_pan  # jump current to first command; no simulator-side ramp on arm
+        self.target_pan = new_pan
+
     def update_tilt_callback(self, msg):
-        self.target_tilt = float(msg.data)
-        self.tilt = float(msg.data)
+        new_tilt = float(msg.data)
+        if self.target_tilt is None:
+            self.tilt = new_tilt  # jump current to first command
+        self.target_tilt = new_tilt
+
+    @staticmethod
+    def _step_toward(current: float, target: float, max_step: float) -> float:
+        delta = target - current
+        if abs(delta) <= max_step:
+            return target
+        return current + math.copysign(max_step, delta)
 
     def update_target_camera_pose_callback(self, msg):
         self.target_camera_pose = msg
@@ -286,17 +303,37 @@ class Simulator(Node):
             
     def timer_callback(self):
         try:
+            now = self.get_clock().now()
+            if self._last_tick_time is not None:
+                dt = max(0.0, (now - self._last_tick_time).nanoseconds * 1e-9)
+            else:
+                dt = self.period_time
+            self._last_tick_time = now
             self.update()
+            if self.target_pan is not None:
+                if self.pan_rate_deg_s > 0.0:
+                    self.pan = self._step_toward(self.pan, self.target_pan, self.pan_rate_deg_s * dt)
+                else:
+                    self.pan = self.target_pan
+            if self.target_tilt is not None:
+                if self.tilt_rate_deg_s > 0.0:
+                    self.tilt = self._step_toward(self.tilt, self.target_tilt, self.tilt_rate_deg_s * dt)
+                else:
+                    self.tilt = self.target_tilt
             x = self.world_position.x
             y = self.world_position.y
             z = self.world_position.z
-            self.set_pose(self.name, x, y, z, self.yaw)
-            pitchmsg = Float64()
-            pitchmsg.data = self._gimbal_pitch_cmd_rad(self.tilt)
-            self.gimbal_pitch_pub.publish(pitchmsg)
-            yawmsg = Float64()
-            yawmsg.data = math.radians(self.pan)
-            self.gimbal_yaw_pub.publish(yawmsg)
+            current_pose = (x, y, z, self.yaw)
+            if current_pose != self._last_set_pose:
+                self.set_pose(self.name, x, y, z, self.yaw)
+                self._last_set_pose = current_pose
+            if self.target_tilt is not None or self.target_pan is not None:
+                pitchmsg = Float64()
+                pitchmsg.data = self._gimbal_pitch_cmd_rad(self.tilt)
+                self.gimbal_pitch_pub.publish(pitchmsg)
+                yawmsg = Float64()
+                yawmsg.data = math.radians(self.pan)
+                self.gimbal_yaw_pub.publish(yawmsg)
             now_msg = self.get_clock().now().to_msg()
             quat = quaternion_from_euler(0.0, 0.0, self.yaw)
             msg = PoseStamped()
@@ -317,7 +354,7 @@ class Simulator(Node):
             yaw_debug.vector.z = float(wrap_pi(pose_yaw - self.yaw))
             if self.yaw_debug_pub is not None:
                 self.yaw_debug_pub.publish(yaw_debug)
-            target_tilt_deg = self._absolute_camera_tilt_deg(self.target_tilt)
+            target_tilt_deg = self._absolute_camera_tilt_deg(self.target_tilt if self.target_tilt is not None else self.tilt)
             actual_tilt_deg = self._absolute_camera_tilt_deg(self.tilt)
             actual_camera_yaw, _, _, _ = self._camera_pose_components(self.pan, actual_tilt_deg)
             camera_pose = self._camera_pose_msg(now_msg, x, y, z, self.pan, actual_tilt_deg)
