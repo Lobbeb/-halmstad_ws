@@ -3,6 +3,7 @@
 Default tested path: `warehouse`.
 
 Assumption:
+
 - you already start in the workspace root
 - wrapper files now live under `scripts/`
 - use `./run.sh <name>` and `./stop.sh <name>` from the workspace root
@@ -12,6 +13,7 @@ Assumption:
 - a bare `ros2 launch lrs_halmstad run_follow.launch.py ...` still inherits the launch-argument defaults unless you override them explicitly
 
 Recommended tmux workflow:
+
 - start with `./run.sh tmux_1to1 warehouse`
 - for an on-screen Gazebo test, use `./run.sh tmux_1to1 warehouse gui:=true`
 - start YOLO mode with `./run.sh tmux_1to1 warehouse mode:=yolo`
@@ -103,6 +105,7 @@ YOLO variant in tmux:
 ```
 
 Default tmux layout is panes:
+
 - Gazebo
 - UAV spawn
 - localization
@@ -128,10 +131,12 @@ Useful overrides:
 Default startup is staggered with short delays so the later launches do not all fire at the same instant.
 
 Default delays depend on `gui:=true|false`:
+
 - `gui:=false` uses `spawn=8`, `localization/nav2=10`, and `follow=12`
 - `gui:=true` uses `spawn=6`, `localization/nav2=8`, and `follow=10`
 
 If your machine is slower, increase the delay args:
+
 - `delay_s:=...`
 - `spawn_delay_s:=...`
 - `localization_delay_s:=...`
@@ -151,6 +156,7 @@ Alias:
 ```
 
 Pane layout is:
+
 - row 1: Gazebo | spawn
 - row 2: localization | Nav2
 - row 3: follow
@@ -162,6 +168,7 @@ To stop the tmux-managed stack cleanly, use:
 ```
 
 This sends `Ctrl-c` in this order:
+
 - follow, localization, and Nav2 together
 - wait `5s`
 - Gazebo
@@ -180,6 +187,7 @@ Useful stop overrides:
 ```
 
 Current baseline:
+
 - this odom-follow path now uses `/<ugv>/amcl_pose_odom`, not raw `/platform/odom`
 - `/<ugv>/amcl_pose_odom` is synthesized from `/<ugv>/amcl_pose` by [pose_cov_to_odom.py](src/lrs_halmstad/lrs_halmstad/sim/pose_cov_to_odom.py)
 - when the Clearpath sim odom / TF path is late during startup, the active follow launch also synthesizes `/<ugv>/platform/odom`, `/<ugv>/platform/odom/filtered`, and fallback `odom -> base_link` TF from `/<ugv>/amcl_pose`
@@ -202,11 +210,13 @@ To test the older attached camera path instead of the detached default:
 ```
 
 Important:
+
 - pass the same camera mode to both spawn and follow
 - detached mode does not rely on the attached `45 deg` mount pitch baseline
 - the wrapper alias also accepts `camera:=attached`
 
 Important runtime note:
+
 - Gazebo sim time is guarded through [clock_guard.py](src/lrs_halmstad/lrs_halmstad/sim/clock_guard.py)
 - expected `/clock` publisher is `clock_guard`
 - if Gazebo is restarted or the world is reset, restart localization, Nav2, and follow
@@ -221,13 +231,14 @@ Saved multi-camera / debug layout:
 
 Then under `Perspectives`, choose one from the `perspectives/` folder if needed.
 
-UAV camera: ``/dji0/camera0/image_raw``
+UAV camera: `/dji0/camera0/image_raw`
 
-UGV camera: ``/a201_0000/sensors/camera_0/color/image``
+UGV camera: `/a201_0000/sensors/camera_0/color/image`
 
-YOLO debug image: ``/coord/leader_debug_image``
+YOLO debug image: `/coord/leader_debug_image`
 
 Overlay fields:
+
 - `det_state=<state> reason=<reason> src=<detector|tracker|none> conf=<...> cls=<...>`
 - `track_id=<id|none> state=<raw|reacquire|tracked|na> hits=<...> age_s=<...> switched=<...>`
 - `est_range=<...> src=<depth|ground|const|none> bearing=<...>`
@@ -237,7 +248,6 @@ Overlay fields:
 
 If truth comparison is disabled or stale, `err` shows `na`.
 
-
 Only use the YOLO debug image when you started the YOLO flow from the section below.
 
 ## Control Height And Distance During Runtime
@@ -245,6 +255,7 @@ Only use the YOLO debug image when you started the YOLO flow from the section be
 These work while `./run.sh 1to1_follow` or `./run.sh 1to1_yolo` is running.
 
 Recommended live control:
+
 - change `d_euclidean` during runtime
 - this updates the derived `d_target` and `z_alt` together
 - no restart is needed for this control
@@ -276,6 +287,7 @@ exist under `./scripts/run_<name>.sh` if you want direct file completion.
 ```
 
 Default keyboard mode:
+
 - this is the live tuning path for `d_target` and `z_alt`
 - `w` raises `z_alt`
 - `s` lowers `z_alt`
@@ -286,6 +298,7 @@ Default keyboard mode:
 - `q` quits
 
 Random sweep mode:
+
 - pass `--mode random`
 - current defaults:
 - updates every `10s`
@@ -340,6 +353,7 @@ Recommended planner-enabled bridge run:
 ```
 
 Use this stable bridge mode first when validating planner behavior:
+
 - `use_estimate:=false` keeps the planner + bridge audit focused on the filter/estimator/follow-point/planner/bridge path instead of mixing in extra estimate-driven camera instability too early
 - current tuned defaults reduce area-mode forward aggressiveness, allow smaller yaw corrections to reach the body, and decay commands faster on short loss / no-distance cases
 - `leader_estimator` now uses live camera tilt/yaw topics when available:
@@ -360,9 +374,11 @@ Direct recorder wrapper:
 ```
 
 Default recorder output:
+
 - `bags/experiments/<world>/<timestamp>_<mode>/`
 
 Recorder topic groups:
+
 - default:
   - `/clock`
   - `/coord/events`
@@ -422,9 +438,11 @@ Recorder topic groups:
 Do this while the follow stack is already running.
 
 Default output:
+
 - `datasets/warehouse_auto`
 
 Recommended workflow:
+
 1. start the sim
 2. start the UAV and follow stack
 3. start dataset capture
@@ -433,6 +451,7 @@ Recommended workflow:
 6. once happy, switch world / map campaign and restart all terminals if needed
 
 This gives:
+
 - multiple camera heights / distances
 - multiple view angles
 - multiple relative poses between UGV and UAV
@@ -445,6 +464,7 @@ Wrapper:
 ```
 
 Current capture-topic baseline:
+
 - image topic default is `/<uav>/camera0/image_raw`
 - camera info default is `/<uav>/camera0/camera_info`
 - camera pose default is `/<uav>/camera/actual/center_pose`
@@ -452,6 +472,7 @@ Current capture-topic baseline:
 - older legacy `/<uav>/debug_camera_pose` is not published unless the simulator is started with legacy debug topics enabled
 
 Important:
+
 - dataset capture must use the AMCL-derived UGV pose topic for target geometry
 - older captures made against raw `/platform/odom` should be treated as mislabelled for training
 
@@ -517,6 +538,7 @@ The Step 3 trust/smoothing layer republishes the controller input on `/coord/lea
 The Sensors-inspired estimator-upgrade stage publishes the camera-relative control state on `/coord/leader_visual_target_estimate`.
 Readable controller status is mirrored on `/coord/leader_visual_control_status`.
 The visual test controller:
+
 - prefers `/coord/leader_visual_target_estimate` as the controller-facing input
 - keeps `/coord/leader_selected_target_filtered` for debug/fallback only
 - consumes a camera-relative relative-state estimate built from projected range when valid, otherwise area-derived pseudo-range
@@ -530,6 +552,7 @@ Planner-enabled visual-follow ownership:
 ```
 
 When `start_visual_follow_planner:=true` together with `start_visual_actuation_bridge:=true`:
+
 - the filtered-target + visual-target-estimator + follow-point pipeline starts automatically
 - the planner stage starts automatically on top of that follow-point pipeline
 - the old `follow_uav` / `follow_uav_odom` motion owner is disabled
@@ -543,14 +566,17 @@ When `start_visual_follow_planner:=true` together with `start_visual_actuation_b
 - the bridge also mirrors `/<uav>/pose_cmd` for existing camera/debug consumers
 
 Direct reactive controller mode remains available:
+
 - `start_visual_follow_controller:=true` without `start_visual_follow_point_generator:=true`
 - in that mode the bridge consumes `/coord/leader_visual_control` directly
 
 Direct follow-point mode remains available:
+
 - `start_visual_follow_point_generator:=true start_visual_actuation_bridge:=true`
 - in that mode the bridge consumes `/coord/leader_follow_point` directly without the planner stage
 
 Current planner validation note:
+
 - the stable `use_estimate:=false` bridge path is now the recommended tuning baseline
 - recent tuned proof runs improved closed-loop stability and reduced forward overshoot in that mode
 - recent stable-mode projected-range proof runs entered `range_src=ground` and produced finite upgraded range estimates
@@ -601,6 +627,7 @@ Harder estimate-driven planner probe:
 ```
 
 What that harder probe currently means:
+
 - the planner no longer holds stale planned targets forever; short-loss `HOLD` now times out cleanly into `INVALID`
 - in this harder mode, the main remaining weakness is upstream perception/estimate availability rather than planner ownership
 - recent proof stats showed detector `NO_DET` dominating, with filtered target / visual-target estimate mostly `INVALID`
@@ -613,11 +640,13 @@ Current harder-case hardening proof:
 ```
 
 What changed in that hardening pass:
+
 - `selected_target_filter` now allows bounded low-confidence reacquire from very recent plausible history instead of always dropping to invalid on those weak returns
 - `camera_tracker` now keeps the last trackable leader pose alive briefly so camera pan does not freeze instantly on short estimator dropouts
 - the tuned defaults now give the filter/estimator slightly longer short-gap prediction windows
 
 What that harder proof showed relative to the earlier `planner_estimate_fix` bag:
+
 - filtered target `VALID`: `64 -> 92`
 - visual-target estimate `MEASURED+PREDICTED`: `73 -> 110`
 - follow-point `ACTIVE+HOLD`: `91 -> 130`
@@ -627,6 +656,7 @@ What that harder proof showed relative to the earlier `planner_estimate_fix` bag
 - bridge `active_input=control`: `378 -> 193`
 
 What that means:
+
 - the current visual stack now survives short ugly segments better in the harder estimate-driven mode
 - the planner-backed path stays active materially longer before falling back to stale-control hold
 - the remaining weakness is now more clearly real visibility / geometry loss in close-range or under-UAV scenes, not a stale planner hold bug or immediate short-loss collapse
@@ -638,6 +668,7 @@ Latest shadow-follow hardening proof:
 ```
 
 What changed in that shadow-follow pass:
+
 - `follow_point_generator` now keeps a recent behind-target heading briefly when motion weakens, instead of relying only on the UAV-to-target view line
 - `follow_point_generator` also prefers the estimator's world-frame target pose and yaw as the primary behind-target anchor in the stable planner-backed path
 - follow-point, planner, and bridge progression are all more conservative so the UAV shadows more slowly
@@ -647,16 +678,19 @@ What changed in that shadow-follow pass:
   - it no longer falls back silently to raw controller commands
 
 What that proof showed:
+
 - bridge `active_input=control`: `193 -> 0`
 - bridge `active_input=planned_target`: `180 -> 126`
 - bridge mean `step_xy_m`: `0.1097 -> 0.0649`
 - UAV XY path length over the proof window: `41.26 m -> 15.11 m`
 
 What that means:
+
 - the hard no-odom-style path is still not finished, because visibility / close-range geometry loss still exists upstream
 - but the planner-backed path now degrades much more safely instead of flying off on a lower-level fallback when the visual chain weakens
 
 Current stable behind-target note:
+
 - the stable `use_estimate:=false` planner-backed path now prefers the estimated UGV world pose as the follow-point anchor
 - when that anchor is fresh, `/coord/leader_follow_point_status` reports `policy_mode=target_pose_heading`
 - planner and bridge still stay on the same planned-target pipeline above it
@@ -684,6 +718,7 @@ Runtime turn analysis:
 ```
 
 This subscribes to the follow, estimator, and camera topics and prints an interpreted diagnosis such as:
+
 - camera-only pan is moving
 - UAV body yaw command is moving
 - both camera and body are moving
@@ -703,6 +738,7 @@ Default `run.sh follow_control` mode is keyboard tuning for `d_target` and `z_al
 ```
 
 Default behavior:
+
 - Nav2 still drives the UGV through the current `ugv_nav2_driver` path
 - the UAV/camera runtime uses `leader_estimate` rather than shared UGV pose
 - estimate-mode YOLO repositions the UAV to the seeded startup pose before the first estimate arrives
@@ -728,11 +764,13 @@ Default behavior:
   - `tracker:=true` -> under `models/obb/...`
 
 Current live issue under investigation:
+
 - estimate-follow is much better than before, but the close-range case is still the active problem
 - when the UGV tries to pass underneath or cross the UAV path, the estimator/follow stack can still hold the wrong range or recover too slowly
 - camera/body centering and target-distance recovery are the main things to watch
 
 First topics to watch during that event:
+
 - `/coord/leader_estimate_status`
 - `/coord/leader_debug_image`
 - `/<uav>/psdk_ros2/flight_control_setpoint_ENUposition_yaw`
@@ -796,6 +834,7 @@ Available YOLO models:
 These can be passed to `weights:=...` as relative paths under `<workspace_root>/models`.
 
 Detection models:
+
 - `detection/yolo26/yolo26n.pt`
 - `detection/yolo26/yolo26s.pt`
 - `detection/yolo26/yolo26m.pt`
@@ -803,10 +842,12 @@ Detection models:
 - `detection/yolo26/yolo26x.pt`
 
 Custom models:
+
 - `mymodels/yolo26v1.pt`
 - `mymodels/yolo26v2.pt`
 
 OBB models:
+
 - `obb/yolo26/yolo26n-obb.pt`
 - `obb/yolo26/yolo26s-obb.pt`
 - `obb/yolo26/yolo26m-obb.pt`
@@ -861,6 +902,7 @@ ros2 run nav2_map_server map_saver_cli \
 ```
 
 This creates:
+
 - `maps/warehouse_manual.yaml`
 - `maps/warehouse_manual.pgm`
 
@@ -1043,7 +1085,6 @@ This creates:
   - bare filenames resolve under `src/lrs_halmstad/config/trackers`
 - extra forwarded launch arguments
   - anything else is passed through to `run_follow.launch.py`
-
 
 ### `./run.sh capture_dataset`
 
