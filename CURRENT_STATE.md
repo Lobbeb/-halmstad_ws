@@ -104,12 +104,18 @@ Follow launch chain:
   - starts the runtime nodes:
     - `uav_simulator`
     - `ugv_amcl_to_odom` (`pose_cov_to_odom`)
-    - `follow_uav_odom` or `follow_uav`
+    - `follow_uav_odom` or `follow_uav` (suppressed when `start_visual_actuation_bridge:=true`)
     - `camera_tracker`
-    - optional `visual_follow_controller`
-    - `ugv_nav2_driver`
     - optional perception node: `leader_detector` or `leader_tracker`
     - optional `leader_estimator`
+    - visual pipeline (all gated by `start_visual_actuation_bridge` / `start_visual_follow_planner` etc.):
+      - `selected_target_filter`
+      - `visual_target_estimator`
+      - `follow_point_generator`
+      - `follow_point_planner`
+      - `visual_follow_controller`
+      - `visual_actuation_bridge`
+    - `ugv_nav2_driver`
 - `run_follow_motion.launch.py`
   - compatibility shim including `run_follow.launch.py`
 - `run_1to1_follow.launch.py`
@@ -134,13 +140,17 @@ Current Python package layout under `src/lrs_halmstad/lrs_halmstad`:
   - `leader_detector.py`
   - `leader_tracker.py`
   - `leader_estimator.py`
+  - `visual_target_estimator.py`
   - shared helpers: `detection_protocol.py`, `yolo_common.py`
 - `follow/`
   - `follow_uav.py`
   - `follow_uav_odom.py`
   - `camera_tracker.py`
+  - `selected_target_filter.py`
   - `follow_point_generator.py`
+  - `follow_point_planner.py`
   - `visual_follow_controller.py`
+  - `visual_actuation_bridge.py`
   - `follow_debug.py`
   - `follow_math.py`
 - `sim/`
@@ -164,6 +174,8 @@ Current Python package layout under `src/lrs_halmstad/lrs_halmstad`:
 - `common/`
   - `world_names.py`
   - `paths.py`
+  - `selected_target_state.py`
+  - `visual_target_estimate.py`
 
 ### UGV / Nav2 State
 
@@ -236,7 +248,7 @@ Current selection logic:
 Active YOLO wrapper:
 - `./run.sh 1to1_yolo warehouse`
 
-Current default behavior of `scripts/run_1to1_yolo.sh`:
+Current default behavior of `scripts/run_1to1_yolo.sh` (as of 2026-03-17 merge):
 - `use_estimate:=true`
 - `leader_mode:=estimate`
 - `start_leader_estimator:=true`
@@ -254,6 +266,12 @@ Current default behavior of `scripts/run_1to1_yolo.sh`:
 - `publish_follow_debug_topics:=false`
 - `publish_pose_cmd_topics:=false`
 - `publish_camera_debug_topics:=false`
+- **visual actuation bridge now enabled by default** (merged from william-visual-follow, 2026-03-17):
+  - `start_visual_actuation_bridge:=true`
+  - `start_visual_follow_point_generator:=true`
+  - `start_visual_follow_planner:=true`
+  - `follow_uav` (estimate path) is suppressed by the bridge condition
+  - full visual pipeline runs: `leader_estimator` → `selected_target_filter` → `visual_target_estimator` → `follow_point_generator` → `follow_point_planner` → `visual_actuation_bridge`
 - if `use_estimate:=true` and not overridden:
   - `uav_start_x:=-7.0`
   - `uav_start_z:=7.0`

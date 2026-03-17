@@ -509,6 +509,11 @@ Default behavior:
   - `leader_actual_heading_enable:=true`
   - use `use_actual_heading:=false` if you want motion/estimate heading behavior instead
 - direct `ros2 launch lrs_halmstad run_follow.launch.py ...` does not inherit that quiet wrapper policy automatically
+- **visual actuation bridge is now the default actuation path** (merged 2026-03-17):
+  - `start_visual_actuation_bridge:=true` — `follow_uav` is suppressed
+  - `start_visual_follow_point_generator:=true` and `start_visual_follow_planner:=true` — full planner chain active
+  - full pipeline: `leader_estimator` → `selected_target_filter` → `visual_target_estimator` → `follow_point_generator` → `follow_point_planner` → `visual_actuation_bridge` → UAV
+  - to fall back to the old `follow_uav` path, override: `start_visual_actuation_bridge:=false`
 - bare custom weight names resolve like this:
   - `tracker:=false` -> under `models/detection/...`
   - `tracker:=true` -> under `models/obb/...`
