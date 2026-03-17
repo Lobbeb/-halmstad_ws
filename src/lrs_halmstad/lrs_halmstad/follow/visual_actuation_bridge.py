@@ -39,7 +39,7 @@ class VisualActuationBridge(Node):
         self.declare_parameter("max_xy_step_m", 0.25)
         self.declare_parameter("max_yaw_step_rad", 0.20)
         self.declare_parameter("publish_pose_cmd_mirror", True)
-        self.declare_parameter("use_current_altitude", True)
+        self.declare_parameter("use_current_altitude", False)
         self.declare_parameter("fixed_z_m", 7.0)
 
         self.uav_name = str(self.get_parameter("uav_name").value).strip() or "dji0"

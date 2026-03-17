@@ -41,8 +41,8 @@ class FollowPointPlanner(Node):
         self.declare_parameter("max_planned_step_m", 0.40)
         self.declare_parameter("max_planned_yaw_step_rad", 0.12)
         self.declare_parameter("seed_from_uav_pose", True)
-        self.declare_parameter("use_follow_point_altitude", True)
-        self.declare_parameter("fixed_z_m", 7.0)
+        self.declare_parameter("z_alpha", 0.45)
+        self.declare_parameter("max_planned_z_step_m", 0.40)
 
         self.uav_name = str(self.get_parameter("uav_name").value).strip() or "dji0"
         self.follow_point_topic = str(self.get_parameter("follow_point_topic").value).strip()
@@ -62,8 +62,8 @@ class FollowPointPlanner(Node):
         self.max_planned_step_m = float(self.get_parameter("max_planned_step_m").value)
         self.max_planned_yaw_step_rad = float(self.get_parameter("max_planned_yaw_step_rad").value)
         self.seed_from_uav_pose = coerce_bool(self.get_parameter("seed_from_uav_pose").value)
-        self.use_follow_point_altitude = coerce_bool(self.get_parameter("use_follow_point_altitude").value)
-        self.fixed_z_m = float(self.get_parameter("fixed_z_m").value)
+        self.z_alpha = float(self.get_parameter("z_alpha").value)
+        self.max_planned_z_step_m = float(self.get_parameter("max_planned_z_step_m").value)
 
         if self.tick_hz <= 0.0:
             raise ValueError("tick_hz must be > 0")
@@ -84,8 +84,10 @@ class FollowPointPlanner(Node):
 
         self.have_pose = False
         self.uav_pose = Pose2D(0.0, 0.0, 0.0)
-        self.uav_z = self.fixed_z_m
+        self.uav_z = 0.0
         self.last_pose_stamp: Optional[Time] = None
+        self.planned_z: float = 0.0
+        self._planned_z_seeded = False
 
         self.last_follow_point: Optional[PoseStamped] = None
         self.last_follow_point_stamp: Optional[Time] = None
@@ -148,7 +150,7 @@ class FollowPointPlanner(Node):
         yaw_rad = yaw_from_quat(float(q.x), float(q.y), float(q.z), float(q.w))
         z_value = float(pose.position.z)
         if not math.isfinite(z_value):
-            z_value = self.uav_z if self.have_pose else self.fixed_z_m
+            z_value = self.uav_z
         return (
             float(pose.position.x),
             float(pose.position.y),
@@ -168,7 +170,7 @@ class FollowPointPlanner(Node):
         return (
             float(x or 0.0),
             float(y or 0.0),
-            float(z if z is not None else self.fixed_z_m),
+            float(z if z is not None else self.uav_z),
             float(yaw_rad or 0.0),
             frame_id,
         )
@@ -290,11 +292,15 @@ class FollowPointPlanner(Node):
                     )
                     planned_x = float(interp_x)
                     planned_y = float(interp_y)
-                    planned_z = (
-                        float(raw_z)
-                        if self.use_follow_point_altitude and math.isfinite(float(raw_z))
-                        else self.uav_z
-                    )
+                    if not self._planned_z_seeded and self.have_pose:
+                        self.planned_z = self.uav_z
+                        self._planned_z_seeded = True
+                    if math.isfinite(float(raw_z)):
+                        step_z = float(raw_z) - self.planned_z
+                        if abs(step_z) > self.max_planned_z_step_m:
+                            step_z = math.copysign(self.max_planned_z_step_m, step_z)
+                        self.planned_z = self.planned_z + self.z_alpha * step_z
+                    planned_z = self.planned_z
                     planned_yaw = wrap_pi(base_yaw + step_yaw_rad)
                     self._publish_target(
                         now=now,

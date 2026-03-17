@@ -270,7 +270,8 @@ visual_follow_controller:
 
 follow_point_generator:
   ros__parameters:
-    follow_distance_m: 7.0                   # Desired standoff distance behind the leader in the leader-relative frame.
+    follow_distance_m: 8.0                   # 3D Euclidean sphere radius (standoff distance from leader).
+    follow_altitude_m: 7.0                   # Target UAV world-frame altitude; horizontal dist = sqrt(follow_distance_m^2 - z_delta^2).
     lateral_offset_m: 0.0                    # Optional lateral offset from the follow point (positive = left).
     lookahead_horizon_s: 0.25                # Lookahead duration for leader velocity prediction when placing the follow point.
     heading_dir_alpha: 0.25                  # Low-pass alpha for the estimated leader heading direction.
@@ -280,8 +281,10 @@ follow_point_generator:
 follow_point_planner:
   ros__parameters:
     xy_alpha: 0.45                           # Low-pass alpha for XY planned target position.
+    z_alpha: 0.45                            # Low-pass alpha for Z planned target altitude.
     yaw_alpha: 0.55                          # Low-pass alpha for planned target yaw.
     max_planned_step_m: 0.40                 # Maximum XY step per update to the planned target.
+    max_planned_z_step_m: 0.40              # Maximum Z step per update to the planned target.
     max_planned_yaw_step_rad: 0.12           # Maximum yaw step per update to the planned target.
     hold_timeout_s: 0.5                      # Hold last planned target for this duration after follow-point dropout.
 

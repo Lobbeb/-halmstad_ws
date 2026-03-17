@@ -18,6 +18,7 @@ from lrs_halmstad.follow.follow_math import (
     Pose2D,
     camera_xy_from_uav_pose,
     coerce_bool,
+    horizontal_distance_for_euclidean,
     quat_from_yaw,
     solve_yaw_to_target,
     wrap_pi,
@@ -57,8 +58,7 @@ class FollowPointGenerator(Node):
         self.declare_parameter("target_velocity_alpha", 0.35)
         self.declare_parameter("point_alpha", 0.55)
         self.declare_parameter("max_follow_point_jump_m", 2.0)
-        self.declare_parameter("use_current_altitude", True)
-        self.declare_parameter("fixed_z_m", 7.0)
+        self.declare_parameter("follow_altitude_m", 7.0)
         self.declare_parameter("camera_x_offset_m", 0.0)
         self.declare_parameter("camera_y_offset_m", 0.0)
 
@@ -96,8 +96,7 @@ class FollowPointGenerator(Node):
         self.target_velocity_alpha = float(self.get_parameter("target_velocity_alpha").value)
         self.point_alpha = float(self.get_parameter("point_alpha").value)
         self.max_follow_point_jump_m = float(self.get_parameter("max_follow_point_jump_m").value)
-        self.use_current_altitude = coerce_bool(self.get_parameter("use_current_altitude").value)
-        self.fixed_z_m = float(self.get_parameter("fixed_z_m").value)
+        self.follow_altitude_m = float(self.get_parameter("follow_altitude_m").value)
         self.camera_x_offset_m = float(self.get_parameter("camera_x_offset_m").value)
         self.camera_y_offset_m = float(self.get_parameter("camera_y_offset_m").value)
 
@@ -131,12 +130,13 @@ class FollowPointGenerator(Node):
         self.last_target_estimate_stamp: Optional[Time] = None
         self.last_target_pose_xy: Optional[tuple[float, float]] = None
         self.last_target_pose_yaw: Optional[float] = None
+        self.last_target_pose_z: Optional[float] = None
         self.last_target_pose_stamp: Optional[Time] = None
         self.uav_pose = Pose2D(0.0, 0.0, 0.0)
-        self.uav_z = self.fixed_z_m
+        self.uav_z = self.follow_altitude_m
         self.last_uav_pose_stamp: Optional[Time] = None
         self.camera_pose = Pose2D(0.0, 0.0, 0.0)
-        self.camera_z = self.fixed_z_m
+        self.camera_z = self.follow_altitude_m
         self.camera_frame_id = "map"
         self.last_camera_pose_stamp: Optional[Time] = None
         self.last_tick_time: Optional[Time] = None
@@ -179,6 +179,7 @@ class FollowPointGenerator(Node):
             float(msg.pose.position.x),
             float(msg.pose.position.y),
         )
+        self.last_target_pose_z = float(msg.pose.position.z)
         q = msg.pose.orientation
         self.last_target_pose_yaw = yaw_from_quat(float(q.x), float(q.y), float(q.z), float(q.w))
         try:
@@ -474,10 +475,17 @@ class FollowPointGenerator(Node):
 
                 perp_x = -dir_y
                 perp_y = dir_x
-                raw_follow_x = pred_target_x - self.follow_distance_m * dir_x + self.lateral_offset_m * perp_x
-                raw_follow_y = pred_target_y - self.follow_distance_m * dir_y + self.lateral_offset_m * perp_y
+                leader_z = (
+                    float(self.last_target_pose_z)
+                    if self.last_target_pose_z is not None and math.isfinite(self.last_target_pose_z)
+                    else 0.0
+                )
+                follow_z = self.follow_altitude_m
+                z_delta = follow_z - leader_z
+                horizontal_dist = horizontal_distance_for_euclidean(self.follow_distance_m, z_delta)
+                raw_follow_x = pred_target_x - horizontal_dist * dir_x + self.lateral_offset_m * perp_x
+                raw_follow_y = pred_target_y - horizontal_dist * dir_y + self.lateral_offset_m * perp_y
                 follow_x, follow_y = self._smooth_follow_xy(raw_follow_x, raw_follow_y)
-                follow_z = self.uav_z if self.use_current_altitude else self.fixed_z_m
                 yaw_cmd = solve_yaw_to_target(
                     follow_x,
                     follow_y,
