@@ -43,6 +43,10 @@ class FollowPointPlanner(Node):
         self.declare_parameter("seed_from_uav_pose", True)
         self.declare_parameter("z_alpha", 0.45)
         self.declare_parameter("max_planned_z_step_m", 0.40)
+        self.declare_parameter("use_follow_point_altitude", True)
+        self.declare_parameter("fixed_z_m", 7.0)
+        self.declare_parameter("stale_fp_thresh_m", 0.05)
+        self.declare_parameter("stale_alpha_scale", 0.3)
 
         self.uav_name = str(self.get_parameter("uav_name").value).strip() or "dji0"
         self.follow_point_topic = str(self.get_parameter("follow_point_topic").value).strip()
@@ -64,6 +68,10 @@ class FollowPointPlanner(Node):
         self.seed_from_uav_pose = coerce_bool(self.get_parameter("seed_from_uav_pose").value)
         self.z_alpha = float(self.get_parameter("z_alpha").value)
         self.max_planned_z_step_m = float(self.get_parameter("max_planned_z_step_m").value)
+        self.use_follow_point_altitude = coerce_bool(self.get_parameter("use_follow_point_altitude").value)
+        self.fixed_z_m = float(self.get_parameter("fixed_z_m").value)
+        self.stale_fp_thresh_m = float(self.get_parameter("stale_fp_thresh_m").value)
+        self.stale_alpha_scale = max(0.0, min(1.0, float(self.get_parameter("stale_alpha_scale").value)))
 
         if self.tick_hz <= 0.0:
             raise ValueError("tick_hz must be > 0")
@@ -93,6 +101,7 @@ class FollowPointPlanner(Node):
         self.last_follow_point_stamp: Optional[Time] = None
         self.last_planned_target: Optional[PoseStamped] = None
         self.last_planned_target_time: Optional[Time] = None
+        self._prev_fp_xy: Optional[tuple[float, float]] = None
 
         self.create_subscription(PoseStamped, self.follow_point_topic, self.on_follow_point, 10)
         self.create_subscription(PoseStamped, self.uav_pose_topic, self.on_uav_pose, 10)
@@ -273,8 +282,16 @@ class FollowPointPlanner(Node):
                 raw_x, raw_y, raw_z, raw_yaw, frame_id = self._decode_target(self.last_follow_point)
                 if raw_x is not None and raw_y is not None and raw_z is not None and raw_yaw is not None:
                     base_x, base_y, _, base_yaw, _ = self._base_plan()
-                    interp_x = base_x + self.xy_alpha * (float(raw_x) - base_x)
-                    interp_y = base_y + self.xy_alpha * (float(raw_y) - base_y)
+                    # Adaptive alpha: reduce when follow point is stationary (cached upstream)
+                    eff_alpha = self.xy_alpha
+                    if self._prev_fp_xy is not None:
+                        fp_delta = math.hypot(float(raw_x) - self._prev_fp_xy[0],
+                                              float(raw_y) - self._prev_fp_xy[1])
+                        if fp_delta < self.stale_fp_thresh_m:
+                            eff_alpha = self.xy_alpha * self.stale_alpha_scale
+                    self._prev_fp_xy = (float(raw_x), float(raw_y))
+                    interp_x = base_x + eff_alpha * (float(raw_x) - base_x)
+                    interp_y = base_y + eff_alpha * (float(raw_y) - base_y)
                     if self.max_planned_step_m > 0.0:
                         interp_x, interp_y = clamp_point_to_radius(
                             base_x,

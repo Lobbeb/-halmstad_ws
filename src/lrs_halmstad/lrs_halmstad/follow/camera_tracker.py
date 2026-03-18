@@ -44,6 +44,8 @@ class CameraTracker(Node):
         self.leader_input_type = str(self.declare_parameter("leader_input_type", "odom").value).strip().lower()
         self.leader_odom_topic = str(self.declare_parameter("leader_odom_topic", "/a201_0000/platform/odom/filtered").value)
         self.leader_pose_topic = str(self.declare_parameter("leader_pose_topic", "/coord/leader_estimate").value)
+        self.declare_parameter("leader_actual_pose_topic", "")
+        self.leader_actual_pose_topic = str(self.get_parameter("leader_actual_pose_topic").value).strip()
         self.leader_status_topic = str(self.declare_parameter("leader_status_topic", "/coord/leader_estimate_status").value).strip()
         self.leader_detection_topic = str(self.declare_parameter("leader_detection_topic", "/coord/leader_detection").value).strip()
         self.camera_info_topic = (
@@ -54,6 +56,7 @@ class CameraTracker(Node):
         self.camera_target_root = f"{self.camera_topic_root}/target"
         self.camera_debug_root = f"{self.camera_topic_root}/debug"
         self.uav_camera_mode = str(self.declare_parameter("uav_camera_mode", "integrated_joint").value).strip().lower()
+        self.camera_mount_pitch_deg = float(self.declare_parameter("camera_mount_pitch_deg", 45.0).value)
         self.uav_pose_cmd_topic = str(self.declare_parameter("uav_pose_cmd_topic", "").value).strip()
         self.tick_hz = max(1.0, float(yaml_param(self, "tick_hz")))
         self.pose_timeout_s = float(yaml_param(self, "pose_timeout_s"))
@@ -70,12 +73,15 @@ class CameraTracker(Node):
         self.pan_enable = coerce_bool(yaml_param(self, "pan_enable"))
         self.default_tilt_deg = float(yaml_param(self, "default_tilt_deg"))
         self.tilt_enable = coerce_bool(yaml_param(self, "tilt_enable"))
+        self.tilt_deadband_deg = max(0.0, float(self.declare_parameter("tilt_deadband_deg", 0.0).value))
         self.image_center_correction_enable = coerce_bool(yaml_param(self, "image_center_correction_enable"))
         self.image_center_correction_timeout_s = max(0.0, float(yaml_param(self, "image_center_correction_timeout_s")))
+        self.image_center_deadband_deg = max(0.0, float(self.declare_parameter("image_center_deadband_deg", 0.75).value))
         self.pan_image_center_gain = float(yaml_param(self, "pan_image_center_gain"))
         self.pan_image_center_max_deg = max(0.0, float(yaml_param(self, "pan_image_center_max_deg")))
         self.tilt_image_center_gain = float(yaml_param(self, "tilt_image_center_gain"))
         self.tilt_image_center_max_deg = max(0.0, float(yaml_param(self, "tilt_image_center_max_deg")))
+        self.actual_pose_reacquire_enable = coerce_bool(self.declare_parameter("actual_pose_reacquire_enable", False).value)
         self.publish_debug_topics = coerce_bool(yaml_param(self, "publish_debug_topics"))
         self.gimbal_override_hold_s = max(0.0, float(yaml_param(self, "gimbal_override_hold_s")))
 
@@ -102,6 +108,10 @@ class CameraTracker(Node):
         self.last_trackable_leader_pose: Optional[Pose2D] = None
         self.last_trackable_leader_z: Optional[float] = None
         self.last_trackable_leader_stamp: Optional[Time] = None
+        self.have_actual_leader = False
+        self.actual_leader_pose = Pose2D(0.0, 0.0, 0.0)
+        self.actual_leader_z = 0.0
+        self.last_actual_leader_stamp: Optional[Time] = None
         self.last_detection: Optional[Detection2D] = None
         self.last_detection_stamp: Optional[Time] = None
         self.camera_fx: Optional[float] = None
@@ -145,6 +155,16 @@ class CameraTracker(Node):
                 self.on_leader_status,
                 10,
             ) if self.leader_status_topic else None
+        self.leader_actual_sub = (
+            self.create_subscription(
+                Odometry,
+                self.leader_actual_pose_topic,
+                self.on_actual_leader_odom,
+                10,
+            )
+            if self.actual_pose_reacquire_enable and self.leader_actual_pose_topic
+            else None
+        )
         self.leader_detection_sub = (
             self.create_subscription(
                 String,
@@ -352,6 +372,8 @@ class CameraTracker(Node):
         self.timer = self.create_timer(1.0 / self.tick_hz, self.on_tick)
         self.get_logger().info(
             f"[camera_tracker] Started: uav={self.uav_name}, leader_input={self.leader_input_type}, "
+            f"actual_pose_reacquire_enable={self.actual_pose_reacquire_enable}, "
+            f"leader_actual_pose_topic={self.leader_actual_pose_topic or 'disabled'}, "
             f"pan_enable={self.pan_enable}, default_pan_deg={self.default_pan_deg}, "
             f"tilt_enable={self.tilt_enable}, default_tilt_deg={self.default_tilt_deg}, "
             f"image_center_correction_enable={self.image_center_correction_enable}, "
@@ -383,6 +405,21 @@ class CameraTracker(Node):
             self.last_leader_stamp = Time.from_msg(msg.header.stamp)
         except Exception:
             self.last_leader_stamp = self.get_clock().now()
+
+    def on_actual_leader_odom(self, msg: Odometry) -> None:
+        p = msg.pose.pose.position
+        q = msg.pose.pose.orientation
+        self.actual_leader_pose = Pose2D(
+            float(p.x),
+            float(p.y),
+            yaw_from_quat(float(q.x), float(q.y), float(q.z), float(q.w)),
+        )
+        self.actual_leader_z = float(p.z)
+        self.have_actual_leader = True
+        try:
+            self.last_actual_leader_stamp = Time.from_msg(msg.header.stamp)
+        except Exception:
+            self.last_actual_leader_stamp = self.get_clock().now()
 
     def on_uav_pose(self, msg: PoseStamped) -> None:
         p = msg.pose.position
@@ -497,6 +534,32 @@ class CameraTracker(Node):
             return False
         age_s = (now - self.last_trackable_leader_stamp).nanoseconds * 1e-9
         return age_s <= self.trackable_hold_timeout_s
+
+    def actual_leader_pose_is_fresh(self, now: Time) -> bool:
+        if (
+            not self.actual_pose_reacquire_enable
+            or not self.have_actual_leader
+            or self.last_actual_leader_stamp is None
+        ):
+            return False
+        age_s = (now - self.last_actual_leader_stamp).nanoseconds * 1e-9
+        return age_s <= self.pose_timeout_s
+
+    def _prefer_uav_cmd_pose(self, now: Time) -> bool:
+        return should_prefer_command_pose(
+            have_cmd=self.have_uav_cmd,
+            cmd_stamp_ns=(
+                None if self.last_uav_cmd_stamp is None else int(self.last_uav_cmd_stamp.nanoseconds)
+            ),
+            have_actual=self.have_uav_actual,
+            actual_stamp_ns=(
+                None
+                if self.last_uav_actual_stamp is None
+                else int(self.last_uav_actual_stamp.nanoseconds)
+            ),
+            now_ns=int(now.nanoseconds),
+            pose_timeout_s=self.pose_timeout_s,
+        )
 
     def _tracking_uav_pose(self, now: Time) -> Optional[Pose2D]:
         if self.have_uav_actual:
@@ -837,6 +900,9 @@ class CameraTracker(Node):
         elif self.last_trackable_leader_is_fresh(now):
             tracked_leader_pose = self.last_trackable_leader_pose
             tracked_leader_z = self.last_trackable_leader_z
+        elif self.actual_leader_pose_is_fresh(now):
+            tracked_leader_pose = self.actual_leader_pose
+            tracked_leader_z = self.actual_leader_z
         if leader_tilt_trackable:
             tilt_leader_pose = Pose2D(
                 self.leader_pose.x,
@@ -847,6 +913,9 @@ class CameraTracker(Node):
         elif self.last_trackable_leader_is_fresh(now):
             tilt_leader_pose = self.last_trackable_leader_pose
             tilt_leader_z = self.last_trackable_leader_z
+        elif self.actual_leader_pose_is_fresh(now):
+            tilt_leader_pose = self.actual_leader_pose
+            tilt_leader_z = self.actual_leader_z
 
         if tracked_leader_pose is not None and tracked_leader_z is not None:
             self._publish_camera_debug_for_target(uav_pose, uav_z, tracked_leader_pose, tracked_leader_z)

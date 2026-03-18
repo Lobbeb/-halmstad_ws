@@ -1,6 +1,7 @@
 ## Current State
 
 Assumption:
+
 - start in the workspace root
 - wrapper files now live under `scripts/`
 - user-facing entrypoints are `./run.sh <name>` and `./stop.sh <name>`
@@ -9,15 +10,18 @@ Assumption:
 ### Active Baseline
 
 Recommended start/stop flow:
+
 1. `./run.sh tmux_1to1 warehouse`
 2. `./stop.sh tmux_1to1 warehouse`
 
 Recommended tmux variants:
+
 - normal follow: `./run.sh tmux_1to1 warehouse`
 - YOLO detection path: `./run.sh tmux_1to1 warehouse mode:=yolo`
 - YOLO tracker path: `./run.sh tmux_1to1 warehouse mode:=yolo tracker:=true`
 
 Current tmux default:
+
 - `layout:=panes`
 - `gui:=false`
 - row 1: `gazebo | spawn`
@@ -26,16 +30,28 @@ Current tmux default:
 - `record:=false`
 
 Current tmux default delays:
+
 - `gui:=true` -> `spawn=6s`, `localization/nav2=8s`, `follow=10s`
 - `gui:=false` -> `spawn=8s`, `localization/nav2=10s`, `follow=12s`
 
+Current tmux startup behavior:
+
+- the tmux wrapper now relies on staged startup delays and cleanup, but it no longer blocks the follow pane on Nav2-localization readiness checks
+- the driver-side guard now carries the Nav2 readiness responsibility, which avoids circular startup waits during AMCL initial-pose seeding
+- `ugv_nav2_driver` now also performs its own wait for those required Nav2 lifecycle nodes before sending the first goal and before retrying a rejected goal, so the guard does not depend only on tmux orchestration
+- on WSL, `gazebo_sim` now defaults to `LIBGL_ALWAYS_SOFTWARE=1` for GUI stability unless you override it
+- tmux start/stop safety cleanup now also kills leftover child ROS nodes from the 1-to-1 stack, not just the top-level `ros2 launch ...` wrappers
+- `camera_tracker` now uses an odom-frame UGV pose as a camera-only reacquisition fallback when estimate tracking starts in `NO_DET`, so the detached camera can re-aim toward the UGV without mixing `map` and `odom` geometry or handing motion control back to truth pose
+
 Per-stage delay overrides now exist:
+
 - `spawn_delay_s:=...`
 - `localization_delay_s:=...`
 - `nav2_delay_s:=...`
 - `follow_delay_s:=...`
 
 New tmux extras:
+
 - `record:=true|false`
 - `record_profile:=default|step2_light|vision`
 - `record_tag:=...`
@@ -81,6 +97,7 @@ New tmux extras:
   - `/<uav>/pose`
 
 Equivalent manual run order:
+
 1. `./run.sh gazebo_sim warehouse`
 2. `./run.sh spawn_uav warehouse`
 3. `./run.sh localization warehouse`
@@ -90,6 +107,7 @@ Equivalent manual run order:
 ### Main Runtime Chain
 
 Top-level wrapper chain:
+
 - `scripts/run_tmux_1to1.sh`
   - dispatches through `./run.sh gazebo_sim`
   - dispatches through `./run.sh spawn_uav`
@@ -98,13 +116,17 @@ Top-level wrapper chain:
   - dispatches through `./run.sh 1to1_follow` or `./run.sh 1to1_yolo`
 
 Follow launch chain:
+
 - `scripts/run_1to1_follow.sh`
   - launches `src/lrs_halmstad/launch/run_follow.launch.py`
 - `run_follow.launch.py`
   - starts the runtime nodes:
     - `uav_simulator`
     - `ugv_amcl_to_odom` (`pose_cov_to_odom`)
-    - `follow_uav_odom` or `follow_uav` (suppressed when `start_visual_actuation_bridge:=true`)
+    - `ugv_amcl_to_platform_odom` (`pose_cov_to_odom`)
+    - `ugv_amcl_to_platform_filtered_odom` (`pose_cov_to_odom`)
+    - `ugv_platform_odom_to_tf` (`odom_to_tf`)
+    - `follow_uav_odom` or `follow_uav`
     - `camera_tracker`
     - optional perception node: `leader_detector` or `leader_tracker`
     - optional `leader_estimator`
@@ -122,6 +144,7 @@ Follow launch chain:
   - compatibility shim including `run_follow.launch.py`
 
 Spawn chain:
+
 - `scripts/run_spawn_uav.sh`
   - launches `spawn_uav_1to1.launch.py`
 - `spawn_uav_1to1.launch.py`
@@ -131,11 +154,13 @@ Spawn chain:
   - detached camera mode has been removed from simulation
 
 Important separation:
+
 - `scripts/run_spawn_uav.sh` creates the Gazebo entities
 - `scripts/run_1to1_follow.sh` / `scripts/run_1to1_yolo.sh` start the runtime logic
 - nothing actually follows until the follow launch is running
 
 Current Python package layout under `src/lrs_halmstad/lrs_halmstad`:
+
 - `perception/`
   - `leader_detector.py`
   - `leader_tracker.py`
@@ -180,24 +205,35 @@ Current Python package layout under `src/lrs_halmstad/lrs_halmstad`:
 ### UGV / Nav2 State
 
 The validated UGV truth path is still:
+
 - `/<ugv>/amcl_pose`
 - `pose_cov_to_odom`
 - `/<ugv>/amcl_pose_odom`
 
 Important interpretation:
+
 - `leader_mode:=odom` means "consume an `Odometry` topic"
 - the validated odom topic is `/<ugv>/amcl_pose_odom`
 - do not switch the active follow path back to raw `/platform/odom`
 - do not switch dataset capture back to raw `/platform/odom`
 
 Current relevant files:
+
 - `src/lrs_halmstad/launch/run_follow.launch.py`
 - `src/lrs_halmstad/lrs_halmstad/sim/pose_cov_to_odom.py`
+- `src/lrs_halmstad/lrs_halmstad/sim/odom_to_tf.py`
 - `src/lrs_halmstad/lrs_halmstad/follow/follow_uav_odom.py`
 - `src/lrs_halmstad/lrs_halmstad/nav/ugv_nav2_driver.py`
 - `src/lrs_halmstad/lrs_halmstad/dataset/sim_dataset_capture.py`
 
+Current Nav2 fallback for sim startup:
+
+- the active follow path now publishes fallback `/<ugv>/platform/odom` and `/<ugv>/platform/odom/filtered` from `/<ugv>/amcl_pose`
+- the active follow path now also publishes fallback `odom -> base_link` TF from that AMCL-derived filtered odom stream
+- this keeps Nav2 local costmaps and the UGV motion driver alive even when the Clearpath Gazebo model TF bridge is late or absent
+
 Clearpath path:
+
 - Gazebo sim, localization, Nav2, and SLAM now use the workspace Clearpath copy:
   - `src/lrs_halmstad/clearpath`
 - the old `/home/ruben/clearpath` path is no longer the active runtime path
@@ -211,6 +247,7 @@ Warehouse file-waypoint behavior:
 This is the biggest structural change from earlier in the project.
 
 Current active perception architecture:
+
 - `perception/leader_detector.py`
   - plain detection node
   - runs a model on camera images
@@ -231,11 +268,13 @@ Current active perception architecture:
   - estimate status no longer mirrors tracker-owned detection metadata
 
 Important consequence:
+
 - `perception/leader_estimator.py` is no longer the predictor/tracker brain
 - the prediction backend is now swappable
 - detector and tracker are separate runtime choices
 
 Current selection logic:
+
 - `external_detection_node:=detector`
   - starts `leader_detector`
 - `external_detection_node:=tracker`
@@ -246,6 +285,7 @@ Current selection logic:
 ### YOLO / Tracker Path
 
 Active YOLO wrapper:
+
 - `./run.sh 1to1_yolo warehouse`
 
 Current default behavior of `scripts/run_1to1_yolo.sh` (as of 2026-03-17 merge):
@@ -280,6 +320,7 @@ Current default behavior of `scripts/run_1to1_yolo.sh` (as of 2026-03-17 merge):
   - pass `use_actual_heading:=false`
 
 Current test variants:
+
 - shared truth pose control instead of estimate:
   - `./run.sh 1to1_yolo warehouse use_estimate:=false`
 - tracker instead of plain detector:
@@ -296,6 +337,7 @@ Current test variants:
   - `./run.sh 1to1_yolo warehouse obb:=false`
 
 Current weights resolution:
+
 - detection default root: `models/detection/mymodels`
 - OBB default root: `models/obb/mymodels`
 - plain detector default weight when `obb:=false`:
@@ -309,6 +351,7 @@ Current weights resolution:
 ### Follow Data Flow
 
 Normal odom follow:
+
 - `follow_uav_odom`
   - subscribes to `/<ugv>/amcl_pose_odom`
   - subscribes to `/<uav>/pose`
@@ -316,6 +359,7 @@ Normal odom follow:
   - can publish `/<uav>/pose_cmd/odom`
 
 Estimate follow:
+
 - `leader_detector` or `leader_tracker`
   - publishes `/coord/leader_detection`
   - publishes `/coord/leader_detection_status`
@@ -337,6 +381,7 @@ Estimate follow:
   - can publish `/<uav>/follow/{target,actual,error,debug}/*` topics when enabled
 
 Visual-follow test path:
+
 - `selected_target_filter`
   - subscribes to `/coord/leader_selected_target`
   - publishes `/coord/leader_selected_target_filtered`
@@ -350,6 +395,7 @@ Visual-follow test path:
   - publishes `/coord/leader_visual_control_debug_image`
 
 Recorder coverage for Step 2 validation:
+
 - `./run.sh tmux_1to1 warehouse mode:=yolo record:=true`
   - captures the raw selected target, filtered selected target, upgraded visual target estimate, follow-point outputs, and visual-control outputs
 - `record_profile:=step2_light`
@@ -358,6 +404,7 @@ Recorder coverage for Step 2 validation:
   - adds the camera and debug-image streams needed for post-run proof
 
 Camera side:
+
 - `camera_tracker`
   - subscribes to the same leader topic used by the active follow path
   - also listens to `/coord/leader_estimate_status`
@@ -367,12 +414,14 @@ Camera side:
     - optional `/<uav>/camera0/{target,debug}/*` topics
 
 Simulator side:
+
 - `uav_simulator`
   - consumes `/<uav>/psdk_ros2/flight_control_setpoint_ENUposition_yaw`
   - consumes `/<uav>/update_pan` and `/<uav>/update_tilt`
   - publishes `/<uav>/pose`, `/<uav>/camera0/{actual,error}/*`, and follow debug topics
 
 Optional Step 2 test path:
+
 - `leader_estimator`
   - also publishes clean selected-target state on `/coord/leader_selected_target`
 - `selected_target_filter`
@@ -397,6 +446,7 @@ Optional Step 2 test path:
   - publishes controller overlay on `/coord/leader_visual_control_debug_image`
 
 Follow-point generation path:
+
 - `follow_point_generator`
   - consumes `/coord/leader_visual_target_estimate`
   - consumes `/coord/leader_estimate`
@@ -410,6 +460,7 @@ Follow-point generation path:
   - briefly holds the last valid follow point across short estimate gaps
 
 Planner path:
+
 - `follow_point_planner`
   - consumes `/coord/leader_follow_point`
   - consumes `/<uav>/pose`
@@ -419,6 +470,7 @@ Planner path:
   - moves only partway toward each new follow point, clamps target jumps, and briefly holds the last planned target on short gaps
 
 Visual-follow bridge path:
+
 - `visual_actuation_bridge`
   - subscribes to `/coord/leader_visual_control`
   - subscribes to `/coord/leader_follow_point`
@@ -434,6 +486,7 @@ Visual-follow bridge path:
   - does not command the UAV directly
 
 Current follow-point visual-follow chain:
+
 - `/coord/leader_selected_target`
   -> `/coord/leader_selected_target_filtered`
   -> `/coord/leader_visual_target_estimate`
@@ -445,6 +498,7 @@ Current follow-point visual-follow chain:
 - the bridge now reports which upstream input it is actively using via `active_input=control|follow_point|planned_target`
 
 Current tuned bridge baseline:
+
 - first tuning/validation should use `start_visual_actuation_bridge:=true` together with `use_estimate:=false`
 - that stable mode isolates controller/filter/bridge motion quality before estimate-driven camera behavior is tuned further
 - current controller defaults were tightened to reduce area-mode forward aggressiveness, allow smaller yaw corrections through, and decay commands faster on short loss / no-distance cases
@@ -480,6 +534,7 @@ Current tuned bridge baseline:
 - the first runtime-hardening pass on that harder mode is now also validated:
   - `selected_target_filter` now allows bounded low-confidence reacquire from very recent plausible history
   - `camera_tracker` now keeps the last trackable leader pose alive briefly so pan does not freeze instantly on short estimator dropouts
+  - `camera_tracker` now also falls back to an odom-frame UGV pose for camera-only reacquisition after longer estimate loss, which is meant for sim/testing visibility recovery rather than motion ownership
   - recent defaults now give the filter/estimator slightly longer short-gap prediction windows
   - harder proof command:
     - `./run.sh tmux_1to1 warehouse gui:=true mode:=yolo tracker:=true obb:=true weights:=warehouse-v1-yolo26n-obb.pt use_estimate:=true use_actual_heading:=false start_visual_follow_planner:=true start_visual_actuation_bridge:=true record:=true record_profile:=step2_light record_tag:=robustness_hardening3 delay_s:=12`
@@ -529,6 +584,7 @@ Current tuned bridge baseline:
 ### Current Active Debug Target
 
 Current live focus in YOLO detect/track follow:
+
 - estimator/follow behavior is much better than earlier, but close-range behavior is still the main problem
 - the UAV can struggle when the UGV passes underneath or tries to cross the UAV path
 - the estimator can still end up holding the fallback/const range at the wrong moment
@@ -536,12 +592,14 @@ Current live focus in YOLO detect/track follow:
 - camera gimbal motion is now smooth (rate-limited, relaxed boot); jumpy pan/tilt from `set_pose` snap-back is resolved
 
 Where to start:
+
 - `follow/follow_uav.py`
 - `follow/camera_tracker.py`
 - `sim/simulator.py`
 - `perception/leader_estimator.py`
 
 Relevant topics to inspect:
+
 - `/coord/leader_detection`
 - `/coord/leader_detection_status`
 - `/coord/leader_estimate`
@@ -565,6 +623,7 @@ Relevant topics to inspect:
 - `/<uav>/update_tilt`
 
 Important current assumption:
+
 - this does not look like a missing detector/tracker wiring problem anymore
 - it looks more like a runtime interaction between estimate state, body yaw/XY commands, and camera pan/tilt commands
 
@@ -646,7 +705,8 @@ Follow controller:
 - `traj_pos_gain: 1.0`
 
 Camera tracker:
-- `tick_hz: 30.0`
+
+- `tick_hz: 20.0`
 - `default_pan_deg: 0.0`
 - `default_tilt_deg: -45.0`
 - `pan_enable: true`
@@ -659,6 +719,7 @@ Camera tracker:
 - tracks from actual UAV pose consistently; the older cmd-pose/actual-pose switching path was removed
 
 Estimator:
+
 - `est_hz: 20.0`
 - `range_mode: auto`
 - `d_target` now seeds the estimator const-mode target too; the old explicit `constant_range_m` launch override is no longer part of the normal run path
@@ -680,6 +741,7 @@ Tracker:
 - `iou_threshold: 0.5`
 
 Important effective-runtime nuance:
+
 - `run_follow.launch.py` still sets launch-default `tracker_config:=botsort.yaml`
 - `run_follow.launch.py` still sets launch-default `leader_actual_pose_enable:=true`
 - `run_follow.launch.py` still sets launch-default `publish_follow_debug_topics:=true`
@@ -694,6 +756,7 @@ directly as `./scripts/run_<name>.sh` or through the root dispatcher as
 `./run.sh <name>`.
 
 `scripts/run_follow_control.sh`
+
 - live tuning helper for follow parameters
 - wrapper now resolves the installed `run_follow_control` entrypoint from `lrs_halmstad.tools.follow_control`
 - current useful modes:
@@ -715,10 +778,12 @@ directly as `./scripts/run_<name>.sh` or through the root dispatcher as
 ### Dataset State
 
 Current rule:
+
 - new dataset capture must use `/<ugv>/amcl_pose_odom`
 - `./run.sh capture_dataset` already enforces this
 
 Current dataset additions:
+
 - `scripts/run_dataset_make_obb.sh`
   - wrapper for installed `run_dataset_make_obb` from `lrs_halmstad.dataset.make_obb`
   - creates `labels_obb/` from saved metadata/projected points
@@ -727,12 +792,14 @@ Current dataset additions:
   - `datasets/warehouse_v1/run2/labels_obb`
 
 Current dataset note:
+
 - `datasets/warehouse_v1/run1` and `run2` now have OBB labels generated separately under `labels_obb`
 - plain detection labels under `labels/` were left untouched
 
 ### What Is Obsolete
 
 These old descriptions should not be trusted anymore:
+
 - `leader_estimator` as the monolithic YOLO + tracking + debounce + hold + reject node
 - notes about estimator hold/debounce reuse being the main active behavior
 - notes about the old direct YOLO path through `run_yolo.sh` / `run_follow_yolo.launch.py`
@@ -740,6 +807,7 @@ These old descriptions should not be trusted anymore:
 - notes about the old `/home/ruben/clearpath` runtime path
 
 Also obsolete in the runbook:
+
 - `run_record_pose_alignment.sh`
 - `run_analyze_pose_alignment.py`
 
@@ -748,6 +816,7 @@ Those files are not present in the workspace and are not part of the active work
 ### Guardrails
 
 Things that should not be "fixed back":
+
 - do not switch follow back to raw `/platform/odom`
 - do not switch dataset capture back to raw `/platform/odom`
 - do not fold model prediction back into `leader_estimator.py`
@@ -758,6 +827,7 @@ Things that should not be "fixed back":
 ### Current Loose Ends
 
 Important current handoff note:
+
 - the package split is now the only active module layout
 - the old top-level compatibility shims have been removed
 - the only compatibility shims still intentionally left are the launch-file shims:
@@ -765,18 +835,21 @@ Important current handoff note:
   - `run_1to1_follow.launch.py`
 
 Current priority is not another refactor:
+
 - first debug the YOLO follow movement/camera snap behavior in live sim
 - only refactor again after the motion cause is understood
 
 ### Build / Validation State
 
 Current validation baseline:
+
 1. `colcon build --symlink-install --packages-select lrs_halmstad` passes
 2. the wrapper/launch rename to `run_follow.launch.py` is in place
 3. the runtime stack starts successfully through the current wrapper flow
 4. detector/tracker follow still needs focused live debugging for the movement issue above
 
 Recommended next-session verification order:
+
 1. clean/rebuild `lrs_halmstad`
 2. restart the tmux stack in YOLO mode
 3. verify which external perception node is active:
@@ -787,5 +860,6 @@ Recommended next-session verification order:
 6. inspect `/coord/leader_estimate_status`, `/coord/leader_debug_image`, and the UAV pan/tilt + body command topics during the camera-snap event
 
 If a new chat continues from here, start by reading:
+
 - this file
 - `RUNNING_SIM.md`

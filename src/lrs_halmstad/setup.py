@@ -95,6 +95,7 @@ setup(
             "omnet_metrics_bridge = lrs_halmstad.sim.omnet_metrics_bridge:main",
             "pose_cmd_to_odom = lrs_halmstad.sim.pose_cmd_to_odom:main",
             "pose_cov_to_odom = lrs_halmstad.sim.pose_cov_to_odom:main",
+            "odom_to_tf = lrs_halmstad.sim.odom_to_tf:main",
             "controller = lrs_halmstad.sim.controller:main",
             "simulator = lrs_halmstad.sim.simulator:main",
             "clock_guard = lrs_halmstad.sim.clock_guard:main",

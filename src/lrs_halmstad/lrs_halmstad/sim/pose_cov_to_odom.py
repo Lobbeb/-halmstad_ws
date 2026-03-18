@@ -17,9 +17,26 @@ class PoseCovToOdom(_PoseToOdomBase):
             history=HistoryPolicy.KEEP_LAST,
             depth=1,
         )
-        self._sub = self.create_subscription(
-            PoseWithCovarianceStamped, self._pose_topic, self._on_pose, amcl_qos
+        amcl_volatile_qos = QoSProfile(
+            durability=DurabilityPolicy.VOLATILE,
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
         )
+        self._subs = [
+            self.create_subscription(
+                PoseWithCovarianceStamped,
+                self._pose_topic,
+                self._on_pose,
+                amcl_qos,
+            ),
+            self.create_subscription(
+                PoseWithCovarianceStamped,
+                self._pose_topic,
+                self._on_pose,
+                amcl_volatile_qos,
+            ),
+        ]
         self.get_logger().info(
             f"Publishing synthetic odom {self._odom_topic} from pose source {self._pose_topic} "
             f"(child_frame_id={self._child_frame_id or '<empty>'})"

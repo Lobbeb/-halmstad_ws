@@ -90,7 +90,8 @@ camera_tracker:
     tilt_image_center_max_deg: 4.0       # Maximum tilt correction from image centering in degrees; keep 1–15°.
     publish_debug_topics: true          # Publish /<uav>/camera/{target,debug}/* geometry and image-centering topics.
     pose_timeout_s: 2.0                # UAV pose older than this is treated as stale; keep 1–4 s.
-    trackable_hold_timeout_s: 0.40    # Hold the last valid trackable-leader pose during brief dropouts; keep 0.2–0.8 s.
+    actual_pose_reacquire_enable: true  # When estimate pose is unavailable, use the actual leader pose to re-aim the camera and recover detections.
+    trackable_hold_timeout_s: 8.0    # Hold the last valid trackable-leader pose during CPU-YOLO inference gaps; keep 0.2–15 s.
     tick_hz: 10.0                    # Camera pan/tilt update rate; keep 5–30 Hz.
     gimbal_override_hold_s: 0.0      # Hold an external tilt/pan override for this many seconds; 0 = disabled. Set > gimbal_interval when using follow_control --gimbal.
 
@@ -182,6 +183,7 @@ leader_estimator:
 
 ugv_nav2_driver:
   ros__parameters:
+    nav2_required_lifecycle_nodes: [map_server, amcl, controller_server, bt_navigator]  # Lifecycle nodes that must be ACTIVE before the first goal is sent.
     continue_on_goal_failure: true        # Move to the next goal when Nav2 rejects or fails the current one.
     path_topic: planned_path             # Debug topic for the planned/sent Nav2 route.
     pose_topic: amcl_pose                 # Localization topic used to read the UGV pose.
@@ -201,7 +203,7 @@ ugv_nav2_driver:
 
     goal_action_name: navigate_to_pose   # Nav2 NavigateToPose action name.
     goal_frame_id: map                    # Frame used for generated/supplied goals.
-    goal_reject_retry_count: 5             # Retries when a goal is rejected by the Nav2 action server; keep 2–10.
+    goal_reject_retry_count: 20            # Retries when a goal is rejected by the Nav2 action server; keep 2–20.
     goal_reject_retry_delay_s: 0.5          # Delay between goal-rejection retries; keep 0.2–1.0 s.
     goal_result_timeout_s: 600.0             # Cancel and advance if Nav2 has not returned a result within this timeout.
     goal_sequence_csv: ""                     # Inline waypoint list (x,y,yaw_deg;...); overrides goal_sequence_file when set.
@@ -283,6 +285,8 @@ follow_point_planner:
     max_planned_z_step_m: 0.40     # Maximum altitude step per planner tick; keep 0.1–0.6 m.
     max_planned_yaw_step_rad: 0.04  # Maximum yaw step per planner tick; at 20 Hz: 0.04 rad/tick ≈ 46°/s; keep 0.02–0.15 rad.
     hold_timeout_s: 0.5            # Hold the last planned target across short follow-point dropouts; keep 0.2–1.0 s.
+    stale_fp_thresh_m: 0.05        # Follow-point movement below this is treated as stationary/cached upstream; triggers adaptive alpha.
+    stale_alpha_scale: 0.3         # Scale applied to xy_alpha when the follow point is stationary (cached upstream estimate).
 
 visual_actuation_bridge:
   ros__parameters:
