@@ -99,6 +99,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.depth_min_m = float(yaml_param(self, "depth_min_m", descriptor=dyn_num))
         self.depth_max_m = float(yaml_param(self, "depth_max_m", descriptor=dyn_num))
         self.depth_max_estimate_jump_m = float(yaml_param(self, "depth_max_estimate_jump_m", descriptor=dyn_num))
+        self.depth_percentile = max(1.0, min(99.0, float(yaml_param(self, "depth_percentile", descriptor=dyn_num))))
         self.target_ground_z_m = float(yaml_param(self, "target_ground_z_m", descriptor=dyn_num))
         self.radio_range_topic = str(self.declare_parameter("radio_range_topic", "/omnet/radio_distance").value).strip()
         self.radio_range_timeout_s = float(self.declare_parameter("radio_range_timeout_s", 0.5).value)
@@ -378,6 +379,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
             det_msg = decode_detection_payload(msg.data)
         except ValueError:
             return
+        now = self.get_clock().now()
         stamp_ns = det_msg.stamp_ns
         if stamp_ns > 0:
             stamp = Time(nanoseconds=stamp_ns, clock_type=self.get_clock().clock_type)
@@ -494,7 +496,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
         patch = patch[(patch >= self.depth_min_m) & (patch <= self.depth_max_m)]
         if patch.size < self.depth_patch_min_valid_px:
             return None
-        return float(np.median(patch))
+        return float(np.percentile(patch, self.depth_percentile))
 
     def _depth_reject_reason(
         self,
@@ -1029,7 +1031,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
             self.publish_status_msg(
                 self._status_line("OK", "estimate_cached", now))
             self.last_debug_state = "OK"
-            self._publish_debug_image("OK", det)
+            self._publish_debug_image("OK", "estimate_cached", det)
             return
 
         if self.camera_model is None:

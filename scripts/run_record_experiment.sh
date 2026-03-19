@@ -47,7 +47,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [world] [mode:=follow|yolo] [uav_name:=dji0] [profile:=default|vision] [tag:=name] [out:=bags/experiments/...] [dry_run:=true|false]" >&2
+      echo "Usage: $0 [world] [mode:=follow|yolo] [uav_name:=dji0] [profile:=default|step2_light|vision] [tag:=name] [out:=bags/experiments/...] [dry_run:=true|false]" >&2
       exit 2
       ;;
   esac
@@ -63,7 +63,7 @@ case "$MODE" in
 esac
 
 case "$PROFILE" in
-  default|vision)
+  default|step2_light|vision)
     ;;
   *)
     echo "Invalid profile: $PROFILE" >&2
@@ -115,9 +115,16 @@ TOPICS=(
   "/$UAV_NAME/update_tilt"
   "/$UAV_NAME/camera0/actual/center_pose"
   "/$UAV_NAME/camera0/target/center_pose"
+  "/$UAV_NAME/camera0/target/world_yaw_rad"
   "/$UAV_NAME/camera0/target_horizontal_distance_m"
   "/$UAV_NAME/camera0/target_distance_3d_m"
   "/$UAV_NAME/camera0/target_vertical_delta_m"
+  "/$UAV_NAME/camera0/debug/tilt_target_cmd_deg"
+  "/$UAV_NAME/camera0/debug/tracking_uav_pose_source"
+  "/$UAV_NAME/camera0/debug/image_error_x_deg"
+  "/$UAV_NAME/camera0/debug/image_error_y_deg"
+  "/$UAV_NAME/camera0/debug/pan_image_correction_deg"
+  "/$UAV_NAME/camera0/debug/tilt_image_correction_deg"
 )
 
 if [ "$MODE" = "follow" ]; then
@@ -130,10 +137,31 @@ if [ "$MODE" = "follow" ]; then
     "/$UAV_NAME/follow/error/tilt_deg"
     "/$UAV_NAME/follow/target/d_target_m"
     "/$UAV_NAME/follow/target/xy_target_m"
+    "/$UAV_NAME/follow/target/anchor_pose"
+    "/$UAV_NAME/follow/target/z_min_m"
+    "/$UAV_NAME/follow/target/d_euclidean_m"
+    "/$UAV_NAME/follow/target/yaw_rad"
     "/$UAV_NAME/follow/actual/xy_distance_m"
     "/$UAV_NAME/follow/actual/distance_3d_m"
+    "/$UAV_NAME/follow/actual/yaw_rad"
     "/$UAV_NAME/follow/error/xy_distance_m"
     "/$UAV_NAME/follow/error/anchor_distance_m"
+    "/$UAV_NAME/follow/error/anchor_along_m"
+    "/$UAV_NAME/follow/error/anchor_cross_m"
+    "/$UAV_NAME/follow/error/yaw_rad"
+    "/$UAV_NAME/follow/debug/yaw_target_raw_rad"
+    "/$UAV_NAME/follow/debug/yaw_target_unwrapped_rad"
+    "/$UAV_NAME/follow/debug/yaw_actual_unwrapped_rad"
+    "/$UAV_NAME/follow/debug/yaw_error_raw_rad"
+    "/$UAV_NAME/follow/debug/yaw_wrap_correction_rad"
+    "/$UAV_NAME/follow/debug/yaw_wrap_active"
+    "/$UAV_NAME/follow/debug/yaw_step_limit_rad"
+    "/$UAV_NAME/follow/debug/yaw_cmd_delta_rad"
+    "/$UAV_NAME/follow/debug/yaw_mode"
+    "/$UAV_NAME/follow/debug/leader_heading_source"
+    "/$UAV_NAME/follow/debug/leader_follow_yaw_rad"
+    "/$UAV_NAME/follow/debug/leader_estimate_yaw_rad"
+    "/$UAV_NAME/follow/debug/leader_actual_heading_yaw_rad"
   )
 fi
 
@@ -143,34 +171,6 @@ if [ "$MODE" = "yolo" ]; then
     "/coord/leader_distance_debug"
     "/coord/leader_estimate_status"
     "/coord/leader_estimate_error"
-    "/$UAV_NAME/follow/target/pan_deg"
-    "/$UAV_NAME/follow/target/tilt_deg"
-    "/$UAV_NAME/follow/actual/pan_deg"
-    "/$UAV_NAME/follow/actual/tilt_deg"
-    "/$UAV_NAME/follow/error/pan_deg"
-    "/$UAV_NAME/follow/error/tilt_deg"
-    "/$UAV_NAME/follow/target/d_target_m"
-    "/$UAV_NAME/follow/target/xy_target_m"
-    "/$UAV_NAME/follow/actual/xy_distance_m"
-    "/$UAV_NAME/follow/actual/distance_3d_m"
-    "/$UAV_NAME/follow/error/xy_distance_m"
-    "/$UAV_NAME/follow/error/anchor_distance_m"
-    "/coord/leader_follow_point"
-    "/coord/leader_follow_point_status"
-    "/coord/leader_planned_target"
-    "/coord/leader_planned_target_status"
-    "/coord/leader_visual_actuation_bridge_status"
-  )
-fi
-
-if [ "$PROFILE" = "step2_light" ]; then
-  TOPICS+=(
-    "/coord/leader_detection_status"
-    "/coord/leader_selected_target"
-    "/coord/leader_selected_target_filtered"
-    "/coord/leader_selected_target_filtered_status"
-    "/coord/leader_visual_target_estimate"
-    "/coord/leader_visual_target_estimate_status"
     "/coord/leader_follow_point"
     "/coord/leader_follow_point_status"
     "/coord/leader_planned_target"
@@ -178,9 +178,19 @@ if [ "$PROFILE" = "step2_light" ]; then
     "/coord/leader_visual_control"
     "/coord/leader_visual_control_status"
     "/coord/leader_visual_actuation_bridge_status"
+    "/coord/leader_detection_status"
+    "/coord/leader_selected_target"
+    "/coord/leader_selected_target_filtered"
+    "/coord/leader_selected_target_filtered_status"
+    "/coord/leader_visual_target_estimate"
+    "/coord/leader_visual_target_estimate_status"
     "/$UAV_NAME/psdk_ros2/flight_control_setpoint_ENUposition_yaw"
-    "/$UAV_NAME/pose_cmd"
-    "/$UAV_NAME/pose"
+    "/$UAV_NAME/follow/target/pan_deg"
+    "/$UAV_NAME/follow/target/tilt_deg"
+    "/$UAV_NAME/follow/actual/pan_deg"
+    "/$UAV_NAME/follow/actual/tilt_deg"
+    "/$UAV_NAME/follow/error/pan_deg"
+    "/$UAV_NAME/follow/error/tilt_deg"
   )
 fi
 

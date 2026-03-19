@@ -66,7 +66,7 @@ class LeaderDetector(DetectionNodeMixin, EventEmitterMixin, Node):
         self.task_type = self._resolve_task_type()
         self._init_yolo()
 
-        self.image_sub = self.create_subscription(Image, self.camera_topic, self.on_image, 10)
+        self.image_sub = self.create_subscription(Image, self.camera_topic, self.on_image, 1)
         self.pub = self.create_publisher(String, self.out_topic, 10)
         self.status_helper = DetectionStatusPublisher(self, self.status_topic)
         self._setup_event_emitter(self.event_topic, self.publish_events)

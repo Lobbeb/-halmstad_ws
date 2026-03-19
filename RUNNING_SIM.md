@@ -344,6 +344,38 @@ Useful examples:
 ./run.sh follow_control --mode random --focus-weight 0.8
 ```
 
+## Reset A Running Experiment
+
+To reset the UAV and restart the follow stack without stopping Gazebo or Nav2:
+
+```bash
+./run.sh reset_experiment warehouse
+```
+
+What it does:
+
+1. Sends Ctrl-C to the follow (and record) pane
+2. Kills all follow-related ROS nodes (`camera_tracker`, `leader_estimator`, `uav_simulator`, etc.) — does **not** touch Gazebo, Nav2, localization, or the spawn pane
+3. Teleports the UAV back to its spawn position via `ros2 service call /world/<world>/set_pose`
+4. Re-sends the original follow command to the follow pane
+5. If recording was active, restarts the recorder after a 3 s delay
+
+Optionally reset the UGV too (teleports back to spawn position and lets `ugv_nav2_driver` re-publish `/initialpose` on follow restart):
+
+```bash
+./run.sh reset_experiment warehouse reset_ugv:=true
+```
+
+Requires that the session was started with `./run.sh tmux_1to1` so pane IDs and the follow command are saved in the state file.
+
+Preview without executing:
+
+```bash
+./run.sh reset_experiment warehouse dry_run:=true
+```
+
+UGV entity name in Gazebo is `<ugv_namespace>/robot` (e.g. `a201_0000/robot`). UAV entity name is the UAV name directly (e.g. `dji0`).
+
 ## Record A Run
 
 Recommended recorder path through tmux:

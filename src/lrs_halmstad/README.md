@@ -23,8 +23,8 @@ Current real follow launch:
 - `/dji0/camera0/camera_info`
 - `/dji0/camera0/depth_image`
 - `/dji0/psdk_ros2/flight_control_setpoint_ENUposition_yaw`
-- `/dji0/update_pan`
-- `/dji0/update_tilt`
+- `/dji0/tilt_override` — external tilt command; held for `gimbal_override_hold_s` seconds, suppressing geometric computation
+- `/dji0/pan_override` — external pan command; same hold mechanism
 - `/dji0/pose`
 
 Legacy optional debug topics:
@@ -168,7 +168,7 @@ ros2 run lrs_halmstad controller --ros-args -p uav_name:=dji0
 - The active perception range mode is `auto` (depth → radio → const). Available explicit modes: `depth`, `radio`, `const`. Set via `range_mode` in `run_follow_defaults.yaml` under `leader_estimator`. The `ground` mode has been removed.
 - When running with OMNeT++, `leader_estimator` subscribes to `/omnet/radio_distance` and uses it as the middle tier in `auto` mode (between depth and constant-range fallback). The raw FSPL-inverted Euclidean range is projected to horizontal distance using the current UAV altitude. Configure via `radio_range_topic` and `radio_range_timeout_s`. Set `radio_range_topic: ''` to disable entirely.
 - Depth range sampling uses the **inner 50 % of the detection bounding box** (25 % margin on each edge) instead of a fixed 5 × 5 pixel patch. This scales correctly at all distances and avoids edge pixels that land on background or drone body. Requires at least 10 valid pixels (`depth_patch_min_valid_px`).
-- YOLO `conf_threshold` is 0.3 for both `leader_detector` and `leader_tracker`. The previous value of 0.4 was above ByteTrack's internal `track_high_thresh: 0.25`, which caused borderline detections (0.30–0.39 confidence) to be dropped before the tracker could see them.
+- YOLO `conf_threshold` is 0.15 for both `leader_detector` and `leader_tracker`. Lowered from 0.3 to improve detection recall with the newer OBB models; `min_confidence_threshold` (absolute floor in `leader_estimator`) is 0.08.
 - YOLO inference runs **CPU-only** (`device: 'cpu'` in `run_follow_defaults.yaml`). GPU inference is not available on WSL2 with AMD hardware: ROCm requires `/dev/dri/renderD*` which WSL2 does not expose, and `torch-directml` is incompatible with YOLO OBB operations. Expected detection rate on CPU is 3–10 Hz depending on image resolution and model size.
 - Image center correction (`image_center_correction_enable`) is **enabled** at `tick_hz: 10.0` (matched to the CPU YOLO detection rate). Running the tracker faster than the detection rate caused corrections to flicker on stale bounding boxes, producing gimbal jitter that disrupted ByteTrack. Keep `tick_hz` ≤ the expected YOLO rate, or disable correction if running at a higher tick rate without GPU inference.
 - All world SDF files use consistent physics parameters: `max_step_size: 0.004`, `real_time_update_rate: 250` (targeting RTF ≤ 1.0).
@@ -193,6 +193,96 @@ If you need to back out the current visible-gimbal fix, revert these files toget
 Expected rollback result:
 - the old static-body teleport behavior returns
 - attached gimbal joints may stop producing visible camera motion in Gazebo again
+
+## Gimbal override
+
+`camera_tracker` ticks at 10 Hz and continuously recomputes tilt/pan geometrically. Publishing directly to the old `update_pan`/`update_tilt` topics was instantly overwritten. The override mechanism lets external tools (e.g. `follow_control --gimbal`) hold a commanded angle for a configurable duration:
+
+- `gimbal_override_hold_s` (in `run_follow_defaults.yaml` under `camera_tracker`): how many seconds to suppress geometric recomputation after receiving an override. Default `0.0` (disabled). Set to a value greater than the gimbal sweep interval when using `follow_control --gimbal`.
+- While an override is active, `camera_tracker` skips its own tilt/pan computation and sends the override value directly.
+- Topics: `/{uav_name}/tilt_override` and `/{uav_name}/pan_override` (`std_msgs/Float64`, degrees).
+
+### follow_control gimbal sweep (random dataset collection)
+
+`follow_control` in `random` mode can simultaneously sweep the gimbal alongside distance/altitude randomisation:
+
+```bash
+# Sweep d_target, z_min AND gimbal together
+ros2 run lrs_halmstad follow_control random --gimbal --uav-name dji0
+
+# Only sweep gimbal (skip d_target/z_min param changes)
+ros2 run lrs_halmstad follow_control random --gimbal-only --uav-name dji0
+
+# Custom sweep ranges and cadence
+ros2 run lrs_halmstad follow_control random --gimbal \
+  --tilt-center -45 --tilt-amplitude 20 --tilt-min -75 --tilt-max -15 \
+  --pan-center 0   --pan-amplitude 25  --pan-min -45 --pan-max 45 \
+  --gimbal-interval 8 --interval 10 --uav-name dji0
+```
+
+Relevant `follow_control random` gimbal args:
+
+| Arg | Default | Description |
+| --- | --- | --- |
+| `--gimbal` | off | Also sweep pan/tilt alongside d_target/z_min |
+| `--gimbal-only` | off | Only sweep pan/tilt; skip d_target/z_min |
+| `--gimbal-interval` | `--interval` | Seconds between gimbal updates |
+| `--tilt-center` | -45° | Centre of the tilt random distribution |
+| `--tilt-amplitude` | 15° | ±amplitude around centre |
+| `--tilt-min` / `--tilt-max` | -75° / -15° | Hard limits |
+| `--pan-center` | 0° | Centre of the pan random distribution |
+| `--pan-amplitude` | 20° | ±amplitude around centre |
+| `--pan-min` / `--pan-max` | -45° / 45° | Hard limits |
+| `--uav-name` | `dji0` | UAV namespace for override topics |
+
+Set `gimbal_override_hold_s` in `run_follow_defaults.yaml` to a value slightly larger than `--gimbal-interval` (e.g. `10.0` with `--gimbal-interval 8`).
+
+## Dataset tools
+
+All dataset tools resolve paths relative to `~/halmstad_ws/datasets/` unless an absolute path is given.
+
+### make_obb — generate OBB labels
+
+```bash
+ros2 run lrs_halmstad make_obb warehouse_v3
+ros2 run lrs_halmstad make_obb warehouse_v3 --overlay          # also write overlay_obb/ images
+ros2 run lrs_halmstad make_obb warehouse_v3 --overlay --overwrite  # regenerate all
+```
+
+- Reads `metadata/<split>/<stem>.json` for `projected_points` and camera intrinsics.
+- Writes Ultralytics 8-point OBB labels to `labels/<split>/`.
+- `--overlay`: draws yellow projected-point dots + green OBB polygon on each image into `overlay_obb/<split>/`.
+- `--overwrite`: regenerates existing label/overlay files instead of skipping them.
+
+### prune_negatives — delete frames where the UGV is not visible
+
+Labels are generated geometrically (without occlusion checking), so some frames have valid-looking labels but the UGV is actually behind a wall or out of frame. Use this tool to prune them:
+
+```bash
+# Dry run — shows what would be deleted
+ros2 run lrs_halmstad prune_negatives warehouse_v3 --dry-run
+
+# Actually delete (removes matching files from images/, labels/, labels_det/, metadata/, overlays/)
+ros2 run lrs_halmstad prune_negatives warehouse_v3
+
+# Stricter threshold (default 8)
+ros2 run lrs_halmstad prune_negatives warehouse_v3 --min-visible-points 12
+```
+
+A frame is pruned when:
+1. The label file is empty, **or**
+2. Fewer than `--min-visible-points` (default `8`) of the 33 projected cuboid corners fall within the image bounds.
+
+Files are deleted from all sibling directories with the same stem (`images/`, `labels/`, `labels_det/`, `metadata/`, `overlay/`, `overlay_detection/`, `overlay_obb/`).
+
+### Zipping for Ultralytics upload
+
+```bash
+cd ~/halmstad_ws/datasets/warehouse_v3
+zip -r ~/warehouse_v3_obb.zip images/ labels/ dataset.yaml
+```
+
+Ensure `dataset.yaml` has `path: .` (not an absolute path) so Ultralytics can resolve it after upload.
 
 ## Contract checks
 

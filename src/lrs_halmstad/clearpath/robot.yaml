@@ -58,8 +58,8 @@ mounts:
 sensors:
   camera:
     - model: intel_realsense
-      urdf_enabled: false
-      launch_enabled: false
+      urdf_enabled: true
+      launch_enabled: true
       parent: base_link
       xyz: [0.31, 0.0, 0.23]
       rpy: [0.0, 0.0, 0.0]

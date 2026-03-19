@@ -101,6 +101,7 @@ class Simulator(Node):
         self.future1_sent_ns = None
         self._last_set_pose = None  # (x, y, z, yaw) — skip set_pose when unchanged
         self._last_tick_time = None
+        self.future2 = None
         self.future2_sent_ns = None
         self._set_pose_ready_after_s = 0.0
         self._set_pose_backoff_until_s = 0.0
@@ -129,7 +130,6 @@ class Simulator(Node):
         camera_actual_pose_topic = self._camera_topic("actual/center_pose")
         camera_target_world_yaw_topic = self._camera_topic("target/world_yaw_rad")
         camera_actual_world_yaw_topic = self._camera_topic("actual/world_yaw_rad")
-        camera_error_world_yaw_topic = self._camera_topic("error/world_yaw_rad")
 
         self.pose_pub = self.create_publisher(PoseStamped, pose_topic, 10, callback_group=self.group)
         self.camera_pose_pub = (
@@ -165,9 +165,6 @@ class Simulator(Node):
         )
         self.camera_actual_world_yaw_pub = self.create_publisher(
             Float32, camera_actual_world_yaw_topic, 10, callback_group=self.group
-        )
-        self.camera_error_world_yaw_pub = self.create_publisher(
-            Float32, camera_error_world_yaw_topic, 10, callback_group=self.group
         )
         self.update_sub = self.create_subscription(
             Joy, cmd_topic, self.update_callback, 10, callback_group=self.group
@@ -429,10 +426,6 @@ class Simulator(Node):
             actual_camera_yaw_msg = Float32()
             actual_camera_yaw_msg.data = float(actual_camera_yaw)
             self.camera_actual_world_yaw_pub.publish(actual_camera_yaw_msg)
-            if self.target_camera_world_yaw is not None:
-                camera_yaw_error_msg = Float32()
-                camera_yaw_error_msg.data = float(wrap_pi(actual_camera_yaw - self.target_camera_world_yaw))
-                self.camera_error_world_yaw_pub.publish(camera_yaw_error_msg)
             target_tilt_msg = Float32()
             target_tilt_msg.data = float(target_tilt_deg)
             self.follow_target_tilt_pub.publish(target_tilt_msg)

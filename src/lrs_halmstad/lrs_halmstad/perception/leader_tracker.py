@@ -77,7 +77,7 @@ class LeaderTracker(DetectionNodeMixin, EventEmitterMixin, Node):
         self.active_track_first_seen_ns: Optional[int] = None
         self.last_infer_reason = "none"
 
-        self.image_sub = self.create_subscription(Image, self.camera_topic, self.on_image, 10)
+        self.image_sub = self.create_subscription(Image, self.camera_topic, self.on_image, 1)
         self.pub = self.create_publisher(String, self.out_topic, 10)
         self.status_helper = DetectionStatusPublisher(self, self.status_topic)
         self._setup_event_emitter(self.event_topic, self.publish_events)

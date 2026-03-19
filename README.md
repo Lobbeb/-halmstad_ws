@@ -42,7 +42,7 @@ Current important notes:
 - attached-camera teleport spawns now use a non-static UAV model with a kinematic base link so the gimbal joints visibly actuate while the UAV body still follows the simulator `set_pose` path
 - Gazebo sim time is guarded by `clock_guard`, and `/clock` should have exactly one publisher
 - `./run.sh 1to1_yolo ...` is the quiet/default YOLO wrapper; bare `ros2 launch ... run_follow.launch.py ...` does not automatically inherit those quiet overrides
-- current active debugging target is the YOLO follow motion bug where the camera can snap upward and the UAV briefly surges forward before recovering
+- gimbal override is active (`gimbal_override_hold_s: 10.0`); use `follow_control random --gimbal` to sweep pan/tilt during dataset collection without the camera snapping back
 
 The rest of this README contains older reference material and may be stale compared with the two files above.
 

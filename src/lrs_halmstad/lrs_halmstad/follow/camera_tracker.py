@@ -292,24 +292,6 @@ class CameraTracker(Node):
             if self.publish_debug_topics
             else None
         )
-        self.tilt_hdist_pub = (
-            self.create_publisher(
-                Float32,
-                f"{self.camera_debug_root}/tilt_target_horizontal_distance_m",
-                10,
-            )
-            if self.publish_debug_topics
-            else None
-        )
-        self.tilt_vdelta_pub = (
-            self.create_publisher(
-                Float32,
-                f"{self.camera_debug_root}/tilt_target_vertical_delta_m",
-                10,
-            )
-            if self.publish_debug_topics
-            else None
-        )
         self.tracking_uav_pose_source_pub = (
             self.create_publisher(
                 String,
@@ -341,15 +323,6 @@ class CameraTracker(Node):
             self.create_publisher(
                 Float32,
                 f"{self.camera_debug_root}/pan_image_correction_deg",
-                10,
-            )
-            if self.publish_debug_topics
-            else None
-        )
-        self.image_correction_state_pub = (
-            self.create_publisher(
-                String,
-                f"{self.camera_debug_root}/image_correction_state",
                 10,
             )
             if self.publish_debug_topics
@@ -798,14 +771,10 @@ class CameraTracker(Node):
         uav_pose_source: str,
         tilt_mode: str,
         target_cmd_deg: Optional[float],
-        leader_pose: Optional[Pose2D],
-        leader_z: Optional[float],
     ) -> None:
         if (
             self.tilt_mode_pub is None
             or self.tilt_target_cmd_pub is None
-            or self.tilt_hdist_pub is None
-            or self.tilt_vdelta_pub is None
             or self.tracking_uav_pose_source_pub is None
         ):
             return
@@ -821,23 +790,6 @@ class CameraTracker(Node):
         target_cmd_msg = Float32()
         target_cmd_msg.data = float("nan") if target_cmd_deg is None else float(target_cmd_deg)
         self.tilt_target_cmd_pub.publish(target_cmd_msg)
-
-        hdist_msg = Float32()
-        vdelta_msg = Float32()
-        if leader_pose is None or leader_z is None:
-            hdist_msg.data = float("nan")
-            vdelta_msg.data = float("nan")
-        else:
-            horizontal_distance, _distance_3d, vertical_delta = self._camera_target_distance_values(
-                uav_pose,
-                uav_z,
-                leader_pose,
-                leader_z,
-            )
-            hdist_msg.data = float(horizontal_distance)
-            vdelta_msg.data = float(vertical_delta)
-        self.tilt_hdist_pub.publish(hdist_msg)
-        self.tilt_vdelta_pub.publish(vdelta_msg)
 
     def _publish_image_correction_debug(
         self,
@@ -957,8 +909,6 @@ class CameraTracker(Node):
             uav_pose_source=uav_pose_source,
             tilt_mode=tilt_mode,
             target_cmd_deg=target_tilt_cmd_deg,
-            leader_pose=tilt_leader_pose,
-            leader_z=tilt_leader_z,
         )
         self._publish_image_correction_debug(
             pan_correction_deg=pan_image_correction_deg,

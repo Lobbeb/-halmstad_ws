@@ -65,7 +65,7 @@ follow_uav:
     leader_actual_heading_topic: /a201_0000/amcl_pose_odom  # AMCL odom topic used when leader_actual_heading_enable is true.
     estimate_heading_from_motion_enable: true              # Derive heading from estimated leader motion rather than OBB yaw.
     estimate_heading_max_dt_s: 2.0                        # Ignore heading inference if pose gaps exceed this; keep 1–3 s.
-    estimate_heading_min_speed_mps: 0.15                 # Minimum estimated leader speed before motion-derived heading is trusted; keep 0.1–0.3 m/s.
+    estimate_heading_min_speed_mps: 0.5                 # Minimum estimated leader speed before motion-derived heading is trusted; keep 0.1–0.3 m/s.
 
     traj_enable: true                                  # Enable velocity/acceleration-limited trajectory shaping on the follow target.
     traj_max_accel_mps2: 2.5                          # Maximum acceleration inside the trajectory shaper; keep 1–5 m/s².
@@ -90,7 +90,7 @@ camera_tracker:
     tilt_image_center_max_deg: 4.0       # Maximum tilt correction from image centering in degrees; keep 1–15°.
     publish_debug_topics: true          # Publish /<uav>/camera/{target,debug}/* geometry and image-centering topics.
     pose_timeout_s: 2.0                # UAV pose older than this is treated as stale; keep 1–4 s.
-    actual_pose_reacquire_enable: true  # When estimate pose is unavailable, use the actual leader pose to re-aim the camera and recover detections.
+    actual_pose_reacquire_enable: false  # When estimate pose is unavailable, use the actual leader pose to re-aim the camera and recover detections.
     trackable_hold_timeout_s: 8.0    # Hold the last valid trackable-leader pose during CPU-YOLO inference gaps; keep 0.2–15 s.
     tick_hz: 10.0                    # Camera pan/tilt update rate; keep 5–30 Hz.
     gimbal_override_hold_s: 0.0      # Hold an external tilt/pan override for this many seconds; 0 = disabled. Set > gimbal_interval when using follow_control --gimbal.
@@ -101,6 +101,8 @@ uav_simulator:
     gimbal_pitch_max_rad: 0.7854          # Maximum gimbal pitch in radians (π/4 = 45° up).
     pan_rate_deg_s: 30.0                   # Maximum gimbal pan speed in deg/s; keep 20–120°/s.
     tilt_rate_deg_s: 22.5                   # Maximum gimbal tilt speed in deg/s; keep 15–90°/s.
+    startup_set_pose_grace_s: 3.0           # Block SetEntityPose calls for this long after startup to avoid Gazebo spam; keep 1–5 s.
+    set_pose_failure_backoff_s: 2.0         # Back off this long after a SetEntityPose failure before retrying.
 
 leader_detector:
   ros__parameters:
@@ -172,11 +174,14 @@ leader_estimator:
     range_mode: auto                         # Depth source: auto (depth→radio→const fallback chain), depth, radio, or const.
     d_target: 8.0                           # Fallback range used only when range_mode=const (or auto chain exhausted: no depth, no radio). Does not affect the visual follow pipeline when depth or radio is available.
     depth_max_m: 20.0                      # Maximum valid depth sample in metres; keep 10–30 m.
-    depth_min_m: 0.1                      # Minimum valid depth sample in metres; keep 0.05–0.5 m.
+    depth_min_m: 1.0                      # Minimum valid depth sample in metres; keep 0.05–0.5 m.
     depth_scale: 0.001                   # Scale factor converting raw 16UC1 depth pixel values to metres.
     depth_timeout_s: 0.5                  # Depth frames older than this are rejected; keep 0.2–1.0 s.
     depth_patch_min_valid_px: 10           # Minimum valid pixels in the inner-50% bbox depth patch; keep 5–20.
-    depth_max_estimate_jump_m: 0.0          # Reject depth if it would jump the leader estimate by more than this; 0 = disabled.
+    depth_percentile: 6.0                 # Percentile of valid depth patch pixels used as the range sample (1–99).
+                                           # 50 = median (biased toward background floor at overhead angles).
+                                           # 5–15 = near-side bias, selects UGV surface rather than floor behind it.
+    depth_max_estimate_jump_m: 5.0          # Reject depth if it would jump the leader estimate by more than this; 0 = disabled.
     target_ground_z_m: 0.0                   # World Z of the ground plane used for OBB heading projection; 0 = flat ground.
     radio_range_topic: /omnet/radio_distance  # OMNeT++ FSPL-inverted Euclidean range topic (std_msgs/Float64); empty = disabled.
     radio_range_timeout_s: 0.5               # Radio range older than this is discarded; keep 0.2–1.0 s.
@@ -193,7 +198,7 @@ ugv_nav2_driver:
     initial_pose_covariance_yaw: 0.068  # Yaw covariance placed in the auto-published /initialpose; keep 0.01–0.2.
     initial_pose_frame_id: map         # Frame ID for the auto-published initial pose.
     initial_pose_publish_hz: 1.0      # Rate at which /initialpose is repeated until localization settles; keep 0.5–2 Hz.
-    initial_pose_skip_wait_s: 5.0    # Wait for existing localization for this long before publishing /initialpose; keep 1–10 s.
+    initial_pose_skip_wait_s: 0.5    # Wait for existing localization for this long before publishing /initialpose; keep 0.5–10 s.
     initial_pose_timeout_s: 15.0    # Give up auto-setting initial pose after this timeout; keep 10–30 s.
     initial_pose_topic: initialpose  # Topic used to publish the AMCL/Nav2 initial pose.
     initial_pose_x: 0.0             # Initial pose X for localization bootstrap.
@@ -265,15 +270,18 @@ visual_follow_controller:
 
 follow_point_generator:
   ros__parameters:
-    prefer_target_pose_position: false  # false = use visual_target_estimator bearing+range for world XY (goes through selected_target_filter trust gating); true = use leader_estimator OBB world-frame pose directly (old behaviour).
-    prefer_target_pose_heading: true   # true = use OBB yaw from leader_estimator for follow heading; false = fall back to motion/anchor/view_line heading. Keep true until motion_heading startup guard is added.
+    prefer_target_pose_position: true  # false = use visual_target_estimator bearing+range for world XY (goes through selected_target_filter trust gating); true = use leader_estimator OBB world-frame pose directly (old behaviour).
+    prefer_target_pose_heading: false  # true = use OBB yaw from leader_estimator for follow heading; false = fall back to motion/anchor/view_line heading. OBB has 180° ambiguity — motion heading is more reliable.
     follow_distance_m: 8.0            # 3D Euclidean standoff sphere radius; horizontal component = sqrt(d²−z_delta²); keep 6–15 m.
     follow_altitude_m: 7.0           # Target UAV world-frame altitude; used with follow_distance_m to compute horizontal standoff; keep 4–12 m.
     lateral_offset_m: 0.0           # Fixed lateral offset from the follow point; positive = left; keep −3 to 3 m.
     lookahead_horizon_s: 0.15      # Lookahead horizon for leader velocity prediction when placing the follow point; keep 0.0–0.4 s.
-    heading_dir_alpha: 0.25       # Low-pass alpha for the estimated leader heading direction; keep 0.1–0.6.
+    heading_dir_alpha: 0.8        # Low-pass alpha for the estimated leader heading direction; higher = faster response to direction changes; keep 0.1–1.0.
     point_alpha: 0.35              # Low-pass alpha for the output follow point position; keep 0.2–0.7.
     max_follow_point_jump_m: 1.0    # Reject follow point updates that jump more than this distance; keep 0.5–5.0 m.
+    require_motion_to_start: true    # Hold the follow point in WAITING state until the UGV has started moving; prevents UAV from lunging before UGV is underway.
+    min_target_speed_mps: 0.10       # Minimum UGV speed before motion heading is trusted; lower = activates sooner at startup; keep 0.05–0.3 m/s.
+    target_velocity_alpha: 0.5       # EMA alpha for world-frame velocity used to derive motion heading; keep 0.2–0.8.
     max_target_meas_speed_mps: 2.0   # Clamp raw measured UGV speed before EMA to reject position noise spikes; set to ~2–3× max UGV speed; keep 1.5–4.0 m/s.
 
 follow_point_planner:
@@ -283,7 +291,7 @@ follow_point_planner:
     yaw_alpha: 0.20              # Low-pass alpha for the planned yaw; keep 0.1–0.6.
     max_planned_step_m: 0.25      # Maximum XY step per planner tick; at 20 Hz: 0.25 m/tick = 5 m/s max; keep 0.1–0.6 m.
     max_planned_z_step_m: 0.40     # Maximum altitude step per planner tick; keep 0.1–0.6 m.
-    max_planned_yaw_step_rad: 0.04  # Maximum yaw step per planner tick; at 20 Hz: 0.04 rad/tick ≈ 46°/s; keep 0.02–0.15 rad.
+    max_planned_yaw_step_rad: 0.02  # Maximum yaw step per planner tick; at 20 Hz: 0.02 rad/tick ≈ 23°/s; keep 0.02–0.15 rad.
     hold_timeout_s: 0.5            # Hold the last planned target across short follow-point dropouts; keep 0.2–1.0 s.
     stale_fp_thresh_m: 0.05        # Follow-point movement below this is treated as stationary/cached upstream; triggers adaptive alpha.
     stale_alpha_scale: 0.3         # Scale applied to xy_alpha when the follow point is stationary (cached upstream estimate).
@@ -295,6 +303,6 @@ visual_actuation_bridge:
     yaw_scale: 0.5             # Scale applied to controller yaw rate before sending to the UAV.
     max_xy_step_m: 0.12         # Maximum XY step per bridge tick; at 20 Hz: 0.12 m/tick = 2.4 m/s max; keep 0.05–0.4 m.
     max_yaw_step_rad: 0.06       # Maximum yaw step per bridge tick; at 20 Hz: 0.06 rad/tick ≈ 69°/s; keep 0.02–0.2 rad.
-    use_current_altitude: true    # Send current UAV altitude as the Z command, ignoring the planner Z output; disable once Z control is tuned.
+    use_current_altitude: false   # Use planner's follow_altitude_m for Z; true would ignore planner Z and break 3D follow distance geometry.
     publish_pose_cmd_mirror: true  # Also publish the issued command on /<uav>/pose_cmd for logging/debug.
     yaw_cmd_sign: 1.0             # Yaw rotation direction: 1.0 = normal, -1.0 = inverted; flip if UAV yaws the wrong way.

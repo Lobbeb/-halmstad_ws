@@ -32,6 +32,7 @@ UGV_NAMESPACE="a201_0000"
 SPAWN_ARGS=()
 FOLLOW_ARGS=()
 GAZEBO_ARGS=()
+RECORD_CMD=()
 OMNET="false"
 
 if [ "$#" -gt 0 ] && [[ "$1" != *":="* ]] && [[ "$1" != *=* ]]; then
@@ -213,11 +214,11 @@ case "$RECORD" in
 esac
 
 case "$RECORD_PROFILE" in
-  default|vision)
+  default|step2_light|vision)
     ;;
   *)
     echo "Invalid record_profile: $RECORD_PROFILE" >&2
-    echo "Use record_profile:=default or record_profile:=vision" >&2
+    echo "Use record_profile:=default, step2_light, or vision" >&2
     exit 2
     ;;
 esac
@@ -347,11 +348,12 @@ EOF
 
 signal_processes_by_pattern() {
   local pattern="$1"
-  pkill -INT -f "$pattern" 2>/dev/null || true
-  sleep 1
-  pkill -TERM -f "$pattern" 2>/dev/null || true
-  sleep 1
-  pkill -KILL -f "$pattern" 2>/dev/null || true
+  if pkill -INT -f "$pattern" 2>/dev/null; then
+    sleep 1
+    pkill -TERM -f "$pattern" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -f "$pattern" 2>/dev/null || true
+  fi
 }
 
 signal_named_nodes() {
@@ -374,10 +376,23 @@ prelaunch_safety_cleanup() {
 
 write_session_state() {
   mkdir -p "$TMUX_STATE_DIR"
+  local _record_cmd_str=""
+  if [ "${#RECORD_CMD[@]}" -gt 0 ]; then
+    _record_cmd_str="$(shell_join "${RECORD_CMD[@]}")"
+  fi
   {
     printf 'SESSION=%q\n' "$SESSION"
     printf 'LAYOUT=%q\n' "$LAYOUT"
     printf 'EFFECTIVE_GUI=%q\n' "$EFFECTIVE_GUI"
+    printf 'WORLD=%q\n' "$WORLD"
+    printf 'MODE=%q\n' "$MODE"
+    printf 'UAV_NAME=%q\n' "$UAV_NAME"
+    printf 'UGV_NAMESPACE=%q\n' "$UGV_NAMESPACE"
+    printf 'ROS_DOMAIN_ID_EFFECTIVE=%q\n' "$ROS_DOMAIN_ID_EFFECTIVE"
+    printf 'RMW_IMPLEMENTATION_EFFECTIVE=%q\n' "$RMW_IMPLEMENTATION_EFFECTIVE"
+    printf 'RECORD=%q\n' "$RECORD"
+    printf 'FOLLOW_CMD_STR=%q\n' "$(shell_join "${FOLLOW_CMD[@]}")"
+    printf 'RECORD_CMD_STR=%q\n' "$_record_cmd_str"
     printf 'GAZEBO_PANE_ID=%q\n' "$gazebo_pane"
     printf 'SPAWN_PANE_ID=%q\n' "$spawn_pane"
     printf 'LOCALIZATION_PANE_ID=%q\n' "$localization_pane"
@@ -412,6 +427,7 @@ FOLLOW_CMD=(./run.sh 1to1_follow "$WORLD" "${FOLLOW_ARGS[@]}")
 fi
 
 LOCALIZATION_READY_CMD="$(build_localization_ready_cmd)"
+NAV2_READY_CMD="$(build_nav2_ready_cmd)"
 
 if [ "$RECORD" = true ]; then
   RECORD_CMD=(./run.sh record_experiment "$WORLD" "mode:=$MODE" "uav_name:=$UAV_NAME" "profile:=$RECORD_PROFILE")
