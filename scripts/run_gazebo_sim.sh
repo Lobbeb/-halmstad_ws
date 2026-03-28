@@ -9,6 +9,7 @@ ENABLE_WSL_SOFTWARE_RENDERING="${ENABLE_WSL_SOFTWARE_RENDERING:-auto}"
 STATE_DIR="/tmp/halmstad_ws"
 SIM_PID_FILE="$STATE_DIR/gazebo_sim.pid"
 SIM_WORLD_FILE="$STATE_DIR/gazebo_sim.world"
+CONTROLLER_RECOVERY_PID_FILE="$STATE_DIR/gazebo_sim.controller_recovery.pid"
 
 if [ "$#" -gt 0 ]; then
   shift
@@ -21,6 +22,10 @@ fi
 
 cleanup() {
   if [ -f "$SIM_PID_FILE" ] && [ "$(cat "$SIM_PID_FILE" 2>/dev/null || true)" = "$$" ]; then
+    if [ -f "$CONTROLLER_RECOVERY_PID_FILE" ]; then
+      kill "$(cat "$CONTROLLER_RECOVERY_PID_FILE" 2>/dev/null || true)" 2>/dev/null || true
+      rm -f "$CONTROLLER_RECOVERY_PID_FILE"
+    fi
     rm -f "$SIM_PID_FILE"
     rm -f "$SIM_WORLD_FILE"
   fi
@@ -45,6 +50,11 @@ set -u
 mkdir -p "$STATE_DIR"
 printf '%s\n' "$$" > "$SIM_PID_FILE"
 printf '%s\n' "$WORLD" > "$SIM_WORLD_FILE"
+
+if [ "$WORLD" = "baylands" ]; then
+  "$SCRIPT_DIR/recover_sim_controllers.sh" a201_0000 &
+  printf '%s\n' "$!" > "$CONTROLLER_RECOVERY_PID_FILE"
+fi
 
 # Gazebo + Ogre can crash on some WSL GPU driver stacks.
 # Default to software rendering only on WSL unless explicitly disabled.
