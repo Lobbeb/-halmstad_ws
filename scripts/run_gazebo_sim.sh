@@ -19,6 +19,29 @@ if [ "$#" -gt 0 ] && { [ "$1" = "true" ] || [ "$1" = "false" ]; }; then
   shift
 fi
 
+clean_stale_python_package_build() {
+  local pkg="lrs_halmstad"
+  local launch_dir="$WS_ROOT/build/$pkg/launch"
+  local found_broken=false
+  local path=""
+
+  if [ ! -d "$launch_dir" ]; then
+    return 0
+  fi
+
+  while IFS= read -r -d '' path; do
+    if [ -L "$path" ] && [ ! -e "$path" ]; then
+      found_broken=true
+      echo "[run_gazebo_sim] Removing stale build/install state for '$pkg' due to broken symlink: $path"
+      break
+    fi
+  done < <(find "$launch_dir" -maxdepth 1 -type l -print0 2>/dev/null)
+
+  if [ "$found_broken" = true ]; then
+    rm -rf "$WS_ROOT/build/$pkg" "$WS_ROOT/install/$pkg"
+  fi
+}
+
 cleanup() {
   if [ -f "$SIM_PID_FILE" ] && [ "$(cat "$SIM_PID_FILE" 2>/dev/null || true)" = "$$" ]; then
     rm -f "$SIM_PID_FILE"
@@ -33,6 +56,7 @@ set +u
 source /opt/ros/jazzy/setup.bash
 
 cd "$WS_ROOT"
+clean_stale_python_package_build
 # Limit package discovery to the ROS workspace source tree.
 # This avoids accidentally building reference repos or notes stored elsewhere
 # under the workspace root.
