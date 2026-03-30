@@ -35,6 +35,26 @@ GAZEBO_ARGS=()
 RECORD_CMD=()
 OMNET="false"
 
+usage() {
+  cat >&2 <<EOF
+Usage: $0 [world] [mode:=follow|yolo] [record:=true|false] [record_profile:=default|step2_light|vision]
+          [record_tag:=name] [record_out:=bags/experiments/...] [camera:=attached]
+          [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false]
+          [use_actual_heading:=true|false] [leader_actual_pose_enable:=true|false]
+          [publish_follow_debug_topics:=true|false] [publish_pose_cmd_topics:=true|false]
+          [publish_camera_debug_topics:=true|false] [height:=7] [mount_pitch_deg:=45]
+          [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false]
+          [obb:=true|false] [tracker:=true|false] [external_detection_node:=detector|tracker]
+          [tracker_config:=botsort.yaml] [start_visual_actuation_bridge:=true|false]
+          [start_visual_follow_point_generator:=true|false] [start_visual_follow_planner:=true|false]
+          [start_visual_follow_controller:=true|false] [folder:=...] [map:=/path/map.yaml]
+          [gui:=true|false] [rtf:=1.0] [delay_s:=9] [spawn_delay_s:=9]
+          [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13]
+          [record_delay_s:=13] [session:=name] [tmux_attach:=true|false]
+          [dry_run:=true|false] [layout:=windows|panes] [omnet:=true|false]
+EOF
+}
+
 if [ "$#" -gt 0 ] && [[ "$1" != *":="* ]] && [[ "$1" != *=* ]]; then
   WORLD="$1"
   SESSION="halmstad-${WORLD}-1to1"
@@ -162,7 +182,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [world] [mode:=follow|yolo] [record:=true|false] [record_profile:=default|step2_light|vision] [record_tag:=name] [record_out:=bags/experiments/...] [camera:=attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [use_actual_heading:=true|false] [leader_actual_pose_enable:=true|false] [publish_follow_debug_topics:=true|false] [publish_pose_cmd_topics:=true|false] [publish_camera_debug_topics:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [obb:=true|false] [tracker:=true|false] [external_detection_node:=detector|tracker] [tracker_config:=botsort.yaml] [start_visual_actuation_bridge:=true|false] [start_visual_follow_point_generator:=true|false] [start_visual_follow_planner:=true|false] [start_visual_follow_controller:=true|false] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [rtf:=1.0] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [record_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes] [omnet:=true|false]" >&2
+      usage
       exit 2
       ;;
   esac

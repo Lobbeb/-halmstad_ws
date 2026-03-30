@@ -3,9 +3,9 @@
 <package format="3">
   <name>lrs_halmstad</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>ROS 2 nodes, launch files, and simulation assets for the Halmstad UAV-UGV Gazebo workspace.</description>
   <maintainer email="tommy.persson@liu.se">tompe</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Proprietary</license>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rosgraph_msgs</exec_depend>

@@ -364,8 +364,6 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
         return SetParametersResult(successful=True)
 
     def _current_uav_z(self) -> float:
-        # Odom mode always has uav_cmd_z seeded at startup; drop the have_uav_cmd
-        # guard and uav_start_z fallback that the mixin carries for the generic case.
         if self.have_uav_actual:
             return self.uav_actual_z
         return self.uav_cmd_z
@@ -391,8 +389,6 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
 
     def _current_follow_geometry(self):
         current_uav = self._current_uav_pose()
-        # Body-motion geometry is defined from the UAV body pose to the leader pose.
-        # Camera-relative geometry stays in camera_tracker.py.
         horizontal_distance = math.hypot(self.ugv_pose.x - current_uav.x, self.ugv_pose.y - current_uav.y)
         horizontal_distance = max(horizontal_distance, 1e-3)
         distance_3d = math.hypot(horizontal_distance, self._current_uav_z() - self.ugv_z)
@@ -599,9 +595,7 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
         self.last_debug_actual_yaw_unwrapped = yaw_actual_unwrapped
         yaw_target_unwrapped = yaw_actual_unwrapped + yaw_error
         yaw_wrap_correction = yaw_error_raw - yaw_error
-        # Yaw must be solved from the same XY pose we command in this tick.
-        # Otherwise a large XY step on sharp turns can leave the camera at the
-        # new position with a yaw that was computed for the old position.
+        # Solve yaw from the same XY pose used for this tick's command.
         yaw_rate_rad_s = min(
             max(self.follow_yaw_rate_rad_s, 0.0),
             max(self.follow_yaw_rate_gain, 0.0) * abs(yaw_error),

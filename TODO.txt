@@ -1,5 +1,3 @@
--   Make sure we use controller.py and simulator.py when moving the UAV and UGV so it
-    integrates cleanly with the gitlab code we had from the start.
+- Keep the current baseline behavior stable while cleaning docs, comments, and handoff material.
 
--   Go through the run_follow_defaults.yaml and make sure there are no unused parameters,
-    and that these ARE the defaults UNLESS overriden by terminal input arguments.
+- Audit `run_follow_defaults.yaml` later and confirm which parameters are still active defaults versus legacy leftovers.

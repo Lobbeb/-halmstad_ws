@@ -38,7 +38,6 @@ class FollowUav(FollowControllerCoreMixin, Node):
         super().__init__("follow_uav")
         dyn_num = ParameterDescriptor(dynamic_typing=True)
 
-        # ---------- Parameters ----------
         self.declare_parameter("world", "warehouse")
         self.declare_parameter("uav_name", "dji0")
         self.declare_parameter("leader_input_type", "pose")
@@ -62,9 +61,8 @@ class FollowUav(FollowControllerCoreMixin, Node):
         declare_yaml_param(self, "uav_start_yaw_deg")
         declare_yaml_param(self, "follow_yaw")
 
-        # Freshness and service pacing
-        declare_yaml_param(self, "pose_timeout_s")   # stale if odom older than this
-        declare_yaml_param(self, "min_cmd_period_s") # don't command faster than this even if tick is high
+        declare_yaml_param(self, "pose_timeout_s")
+        declare_yaml_param(self, "min_cmd_period_s")
 
         declare_yaml_param(self, "follow_speed_mps")
         declare_yaml_param(self, "follow_speed_gain")
@@ -101,14 +99,11 @@ class FollowUav(FollowControllerCoreMixin, Node):
         declare_yaml_param(self, "traj_max_speed_mps")
         declare_yaml_param(self, "traj_max_accel_mps2")
         declare_yaml_param(self, "traj_reset_on_yaw_jump_rad")
-        # Estimate-mode already receives a tracker-stabilized pose yaw from
-        # leader_estimator. Re-deriving heading again here adds noise to the
-        # anchor frame, so keep this opt-in.
+        # Motion-derived heading stays opt-in in estimate mode.
         declare_yaml_param(self, "estimate_heading_from_motion_enable")
         declare_yaml_param(self, "estimate_heading_min_speed_mps")
         declare_yaml_param(self, "estimate_heading_max_dt_s")
 
-        # ---------- Read params ----------
         self.world = str(self.get_parameter("world").value)
         self.uav_name = str(self.get_parameter("uav_name").value)
         leader_input_type_raw = str(self.get_parameter("leader_input_type").value).strip().lower()
@@ -269,7 +264,6 @@ class FollowUav(FollowControllerCoreMixin, Node):
         if self.estimate_heading_max_dt_s <= 0.0:
             raise ValueError("estimate_heading_max_dt_s must be > 0")
 
-        # ---------- State ----------
         self.have_ugv = False
         self.have_seen_ugv_pose = False
         self.ugv_pose = Pose2D(0.0, 0.0, 0.0)
@@ -277,7 +271,6 @@ class FollowUav(FollowControllerCoreMixin, Node):
         self.last_actual_heading_yaw: Optional[float] = None
         self.last_actual_heading_stamp: Optional[Time] = None
 
-        # Commanded UAV pose (deterministic internal state)
         self.uav_cmd = Pose2D(self.uav_start_x, self.uav_start_y, self.uav_start_yaw)
         self.have_uav_cmd = bool(self.seed_uav_cmd_on_start)
         self.uav_actual = Pose2D(self.uav_start_x, self.uav_start_y, self.uav_start_yaw)
@@ -305,7 +298,6 @@ class FollowUav(FollowControllerCoreMixin, Node):
         self.leader_motion_speed_mps = 0.0
         self.leader_motion_heading_yaw: Optional[float] = None
 
-        # ---------- ROS I/O ----------
         self.leader_sub = self.create_subscription(
             PoseStamped,
             self.leader_pose_topic,
@@ -648,7 +640,6 @@ class FollowUav(FollowControllerCoreMixin, Node):
         dy = y_world - leader.y
         c = math.cos(leader.yaw)
         s = math.sin(leader.yaw)
-        # Rotate world offset into leader frame.
         return (c * dx + s * dy, -s * dx + c * dy)
 
     def _from_leader_frame(self, leader: Pose2D, x_rel: float, y_rel: float) -> Tuple[float, float]:
@@ -688,8 +679,7 @@ class FollowUav(FollowControllerCoreMixin, Node):
             self.leader_motion_prev_xy = (pose.x, pose.y)
             self.leader_motion_prev_stamp = stamp
             return
-        # Refresh motion heading on a much coarser interval so anchor direction
-        # is based on a meaningful displacement, not frame-to-frame jitter.
+        # Refresh heading on a coarser interval to reduce jitter.
         if dt < 1.0:
             return
         if dt > self.estimate_heading_max_dt_s:
@@ -796,7 +786,6 @@ class FollowUav(FollowControllerCoreMixin, Node):
         step_x = self.traj_rel_vx * dt
         step_y = self.traj_rel_vy * dt
 
-        # Prevent overshoot relative to the desired target.
         if (ex * (ex - step_x) + ey * (ey - step_y)) < 0.0:
             nxt_x, nxt_y = des_rel_x, des_rel_y
             self.traj_rel_vx = 0.0
@@ -1001,8 +990,6 @@ class FollowUav(FollowControllerCoreMixin, Node):
         uav_y = current_uav.y
         uav_z = self._current_uav_z()
 
-        # Body-motion geometry is defined from the UAV body pose to the leader pose.
-        # Camera-relative geometry stays in camera_tracker.py.
         horizontal_distance = math.hypot(leader_x - uav_x, leader_y - uav_y)
         if horizontal_distance < 1e-3:
             horizontal_distance = max(0.01, self._nominal_horizontal_follow_distance())

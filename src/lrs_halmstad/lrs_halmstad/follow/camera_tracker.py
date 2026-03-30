@@ -486,15 +486,9 @@ class CameraTracker(Node):
         return self.last_leader_status_state in TRACKABLE_ESTIMATOR_STATES
 
     def leader_pose_is_tilt_trackable(self, now: Time) -> bool:
-        # Keep vertical framing tied to the freshest estimate pose even when the
-        # estimator status briefly drops out. Pan remains on the stricter
-        # trackable gate to avoid yaw swings from weak estimates.
         return self.leader_pose_is_fresh(now)
 
     def leader_pose_is_pan_trackable(self, now: Time) -> bool:
-        # Keep horizontal framing alive from the freshest estimate pose during
-        # brief NO_DET windows so search climb/translation can keep the leader
-        # in frame instead of freezing pan until status recovers.
         return self.leader_pose_is_fresh(now)
 
     def last_trackable_leader_is_fresh(self, now: Time) -> bool:
@@ -636,7 +630,6 @@ class CameraTracker(Node):
         if not self.tilt_enable:
             return self.default_tilt_deg
         target_tilt_deg = self._compute_tilt_deg(uav_pose, uav_z)
-        # Keep update_tilt in degrees relative to the horizontal plane.
         return target_tilt_deg
 
     def _compute_pan_deg_for_target(
@@ -658,14 +651,9 @@ class CameraTracker(Node):
         dx = target_x - camera_x
         dy = target_y - camera_y
         if math.hypot(dx, dy) < 0.25:
-            # Target is nearly directly below — atan2 becomes numerically unstable at
-            # small horizontal distances.  Hold the last pan command rather than
-            # generating a large, noisy jump.
+            # Hold the last pan command when the target is almost directly below.
             return self.last_pan_cmd_deg if self.last_pan_cmd_deg is not None else self.default_pan_deg
         target_yaw = math.atan2(dy, dx)
-        # Pan command is the raw residual from current UAV yaw to target yaw.
-        # The simulator applies camera_pan_sign and camera_yaw_offset_deg when
-        # converting this command into the rendered camera pose.
         pan_rad = wrap_pi(target_yaw - uav_pose.yaw)
         return math.degrees(pan_rad)
 

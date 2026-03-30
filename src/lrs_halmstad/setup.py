@@ -67,8 +67,8 @@ setup(
     zip_safe=True,
     maintainer='tompe',
     maintainer_email='tommy.persson@liu.se',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    description='ROS 2 nodes, launch files, and simulation assets for the Halmstad UAV-UGV Gazebo workspace.',
+    license='Proprietary',
     extras_require={
         'test': [
             'pytest',
@@ -107,8 +107,6 @@ setup(
             "run_dataset_sync_check = lrs_halmstad.dataset.sync_check:main",
             "ugv_nav2_driver = lrs_halmstad.nav.ugv_nav2_driver:main",
             "ugv_nav2_goal_tester = lrs_halmstad.nav.ugv_nav2_goal_tester:main",
-              # optional later:
-              # 'metrics_node = lrs_halmstad.metrics_node:main',
         ],
     },
 )

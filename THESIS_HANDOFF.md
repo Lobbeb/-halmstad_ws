@@ -4,7 +4,7 @@ This note captures the main conclusions from the recent dataset-labeling and OMN
 
 ### Why This File Is Here
 
-`/home/ruben/halmstad_ws/descriptions/` is ignored by `/home/ruben/halmstad_ws/.gitignore`, so this handoff is intentionally placed at the repository root where it can be committed and moved across machines.
+The old `descriptions/` workspace folder is gitignored, so this handoff is intentionally placed at the repository root where it can be committed and moved across machines.
 
 ### Notation Decisions
 
@@ -15,10 +15,10 @@ This note captures the main conclusions from the recent dataset-labeling and OMN
 
 ### Dataset Capture: What Is Used
 
-Relevant implementation:
+Relevant implementation in this repository:
 
-- `/home/ruben/halmstad_ws/src/lrs_halmstad/lrs_halmstad/dataset/sim_dataset_capture.py`
-- `/home/ruben/halmstad_ws/src/lrs_halmstad/lrs_halmstad/dataset/make_obb.py`
+- `src/lrs_halmstad/lrs_halmstad/dataset/sim_dataset_capture.py`
+- `src/lrs_halmstad/lrs_halmstad/dataset/make_obb.py`
 
 Topics used by `sim_dataset_capture.py`:
 
@@ -124,15 +124,18 @@ Important nuance:
 
 ### OMNeT Bridge Summary
 
-Relevant implementation:
+Relevant implementation in this repository:
 
-- `/home/ruben/halmstad_ws/src/lrs_halmstad/lrs_halmstad/sim/gazebo_pose_tcp_bridge.py`
-- `/home/ruben/halmstad_ws/src/lrs_halmstad/lrs_halmstad/sim/omnet_metrics_bridge.py`
-- `/home/ruben/halmstad_ws/src/lrs_halmstad/launch/run_follow.launch.py`
-- `/home/ruben/omnet_workspace/UAV_UGV/src/gazebo/GazeboPositionScheduler.cc`
-- `/home/ruben/omnet_workspace/UAV_UGV/src/gazebo/GazeboDrivenMobility.cc`
-- `/home/ruben/omnet_workspace/UAV_UGV/src/gazebo/OmnetMetricsServer.cc`
-- `/home/ruben/omnet_workspace/UAV_UGV/omnetpp.ini`
+- `src/lrs_halmstad/lrs_halmstad/sim/gazebo_pose_tcp_bridge.py`
+- `src/lrs_halmstad/lrs_halmstad/sim/omnet_metrics_bridge.py`
+- `src/lrs_halmstad/launch/run_follow.launch.py`
+
+Relevant implementation in the external OMNeT workspace used during integration:
+
+- `UAV_UGV/src/gazebo/GazeboPositionScheduler.cc`
+- `UAV_UGV/src/gazebo/GazeboDrivenMobility.cc`
+- `UAV_UGV/src/gazebo/OmnetMetricsServer.cc`
+- `UAV_UGV/omnetpp.ini`
 
 Current flow:
 

@@ -6,7 +6,7 @@
   <description>Gazebo GUI plugins for the lrs_halmstad workspace.</description>
 
   <maintainer email="tommy.persson@liu.se">tompe</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Proprietary</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 

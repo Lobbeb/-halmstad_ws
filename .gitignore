@@ -7,6 +7,8 @@ log/
 
 # --- Runtime output / experiment artifacts ---
 runs/
+/bags/
+tmp_*.txt
 *.mcap
 *.db3
 *.sqlite3
@@ -54,13 +56,18 @@ opt/omnetpp-*/
 
 # --- Local ML weights and datasets ---
 /models
+/ml/
 /datasets
 /descriptions/
+/William/
 *_MATH.md
+
+# --- Local editable assets / scratch files ---
+/maps/*.xcf
 
 # --- Local debug helpers ---
 /run_follow_yaw_debug.py
 /run_pose_source_debug.py
 /run_analyze_pose_source.py
 /run_record_pose_alignment.sh
-
+/debug_logs/

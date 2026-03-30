@@ -176,7 +176,6 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.last_debug_state: str = "INIT"
         self.last_debug_det: Optional[Detection2D] = None
 
-        # ---- estimate caching (prevent re-projection of stale detections) ----
         self._last_projected_det_rx_ns: int = -1
         self._cached_estimate_pose: Optional[Pose2D] = None
         self._cached_estimate_track_id: Optional[int] = None
@@ -385,8 +384,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
             stamp = Time(nanoseconds=stamp_ns, clock_type=self.get_clock().clock_type)
         else:
             stamp = now
-        # Only latch valid detections so that NO_DET frames do not erase the
-        # last real detection before external_detection_timeout_s expires.
+        # Ignore empty frames so the last valid detection can age out normally.
         if det_msg.detection is not None:
             self.last_external_det_stamp = stamp
             self.last_external_det_rx_stamp = now
@@ -471,9 +469,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
         if depth is None:
             return None
         h, w = depth.shape[:2]
-        # Use the inner 50% of the bounding box for depth sampling when available.
-        # This scales with detection size (robust at all distances) and avoids
-        # bbox edge pixels that often land on background or drone body.
+        # Use the inner part of the box to avoid edge/background pixels.
         if det.bbox is not None:
             x1, y1, x2, y2 = det.bbox
             bw = max(1.0, x2 - x1)
@@ -1018,14 +1014,12 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.last_debug_state = "INIT"
         self.last_debug_det = det
 
-        # ---- estimate caching: skip re-projection of stale detections ----
         det_rx_ns = (self.last_external_det_rx_stamp.nanoseconds
                      if self.last_external_det_rx_stamp is not None else -1)
         detection_is_new = (det is not None
                             and det_rx_ns != self._last_projected_det_rx_ns)
 
         if not detection_is_new and det is not None and self._cached_estimate_pose is not None:
-            # Same detection as last projection — republish cached estimate
             self._publish_estimate(
                 self._cached_estimate_pose, now, det.track_id)
             self.publish_status_msg(
