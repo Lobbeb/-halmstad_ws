@@ -4,6 +4,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction, TimerAction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
+from nav2_common.launch import RewrittenYaml
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -663,6 +664,23 @@ def generate_launch_description():
         ],
     )
 
+    detector_runtime_params = RewrittenYaml(
+        source_file=LaunchConfiguration('params_file'),
+        param_rewrites={
+            'backend': LaunchConfiguration('detector_backend'),
+            'onnx_model': LaunchConfiguration('detector_onnx_model'),
+            'async_inference': LaunchConfiguration('detector_async_inference'),
+            'latest_frame_only': LaunchConfiguration('detector_latest_frame_only'),
+            'stale_detection_threshold_ms': LaunchConfiguration('detector_stale_detection_threshold_ms'),
+            'metrics_window_s': LaunchConfiguration('detector_metrics_window_s'),
+            'benchmark_csv_path': LaunchConfiguration('detector_benchmark_csv_path'),
+            'image_qos_depth': LaunchConfiguration('detector_image_qos_depth'),
+            'image_qos_reliability': LaunchConfiguration('detector_image_qos_reliability'),
+            'tracker_config': LaunchConfiguration('tracker_config'),
+        },
+        convert_types=True,
+    )
+
     detector_node = Node(
         package='lrs_halmstad',
         executable='leader_detector',
@@ -670,6 +688,7 @@ def generate_launch_description():
         output='screen',
         condition=_external_perception_condition('detector'),
         parameters=[
+            detector_runtime_params,
             {
                 'use_sim_time': True,
                 'uav_name': LaunchConfiguration('uav_name'),
@@ -690,7 +709,6 @@ def generate_launch_description():
                 'image_qos_reliability': LaunchConfiguration('detector_image_qos_reliability'),
                 'event_topic': LaunchConfiguration('event_topic'),
             },
-            LaunchConfiguration('params_file'),
         ],
     )
 
@@ -701,6 +719,7 @@ def generate_launch_description():
         output='screen',
         condition=_external_perception_condition('tracker'),
         parameters=[
+            detector_runtime_params,
             {
                 'use_sim_time': True,
                 'uav_name': LaunchConfiguration('uav_name'),
@@ -722,7 +741,6 @@ def generate_launch_description():
                 'tracker_config': LaunchConfiguration('tracker_config'),
                 'event_topic': LaunchConfiguration('event_topic'),
             },
-            LaunchConfiguration('params_file'),
         ],
     )
 

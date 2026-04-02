@@ -18,6 +18,7 @@ from lrs_halmstad.common.node_mixins import EventEmitterMixin
 from lrs_halmstad.common.ros_params import yaml_param
 from lrs_halmstad.perception.detection_protocol import Detection2D
 from lrs_halmstad.perception.detection_status import DetectionNodeMixin, DetectionStatusPublisher
+from lrs_halmstad.follow.follow_math import coerce_bool
 from lrs_halmstad.perception.onnx_backend import OnnxYoloRuntime, resolve_onnx_backend_name
 from lrs_halmstad.perception.runtime_metrics import (
     CsvBenchmarkLogger,
@@ -85,9 +86,9 @@ class LeaderDetector(DetectionNodeMixin, EventEmitterMixin, Node):
         self.bbox_continuity_max_px = float(yaml_param(self, "bbox_continuity_max_px", descriptor=dyn_num))
         self.predict_hz = float(yaml_param(self, "predict_hz", descriptor=dyn_num))
         self.event_topic = str(yaml_param(self, "event_topic"))
-        self.publish_events = bool(yaml_param(self, "publish_events"))
-        self.async_inference = bool(yaml_param(self, "async_inference"))
-        self.latest_frame_only = bool(yaml_param(self, "latest_frame_only"))
+        self.publish_events = coerce_bool(yaml_param(self, "publish_events"))
+        self.async_inference = coerce_bool(yaml_param(self, "async_inference"))
+        self.latest_frame_only = coerce_bool(yaml_param(self, "latest_frame_only"))
         self.stale_detection_threshold_ms = float(yaml_param(self, "stale_detection_threshold_ms", descriptor=dyn_num))
         self.metrics_window_s = float(yaml_param(self, "metrics_window_s", descriptor=dyn_num))
         self.benchmark_csv_path = str(yaml_param(self, "benchmark_csv_path")).strip()
