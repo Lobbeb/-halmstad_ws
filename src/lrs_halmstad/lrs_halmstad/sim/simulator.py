@@ -416,7 +416,10 @@ class Simulator(Node):
             yaw_debug.vector.z = float(wrap_pi(pose_yaw - self.yaw))
             if self.yaw_debug_pub is not None:
                 self.yaw_debug_pub.publish(yaw_debug)
-            target_tilt_deg = self._absolute_camera_tilt_deg(self.target_tilt if self.target_tilt is not None else self.tilt)
+            target_tilt_deg = self._absolute_camera_tilt_deg(
+                self.target_tilt if self.target_tilt is not None else self.tilt
+            )
+            target_pan_deg = self.pan if self.target_pan is None else self.target_pan
             actual_tilt_deg = self._absolute_camera_tilt_deg(self.tilt)
             actual_camera_yaw, _, _, _ = self._camera_pose_components(self.pan, actual_tilt_deg)
             camera_pose = self._camera_pose_msg(now_msg, x, y, z, self.pan, actual_tilt_deg)
@@ -436,13 +439,13 @@ class Simulator(Node):
             error_tilt_msg.data = float(actual_tilt_deg - target_tilt_deg)
             self.follow_error_tilt_pub.publish(error_tilt_msg)
             target_pan_msg = Float32()
-            target_pan_msg.data = float(self.target_pan)
+            target_pan_msg.data = float(target_pan_deg)
             self.follow_target_pan_pub.publish(target_pan_msg)
             actual_pan_msg = Float32()
             actual_pan_msg.data = float(self.pan)
             self.follow_actual_pan_pub.publish(actual_pan_msg)
             error_pan_msg = Float32()
-            error_pan_msg.data = float(self.pan - self.target_pan)
+            error_pan_msg.data = float(self.pan - target_pan_deg)
             self.follow_error_pan_pub.publish(error_pan_msg)
         except Exception as ex:
             print("Exception timer_callback:", ex, type(ex))
