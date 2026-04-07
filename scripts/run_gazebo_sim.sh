@@ -26,6 +26,33 @@ cleanup() {
   fi
 }
 
+signal_processes_by_pattern() {
+  local pattern="$1"
+  if pkill -INT -f "$pattern" 2>/dev/null; then
+    sleep 1
+    pkill -TERM -f "$pattern" 2>/dev/null || true
+    sleep 1
+    pkill -KILL -f "$pattern" 2>/dev/null || true
+  fi
+}
+
+signal_named_nodes() {
+  local names_regex="$1"
+  signal_processes_by_pattern "__node:=($names_regex)(\\s|$)"
+}
+
+prelaunch_safety_cleanup() {
+  rm -f "$SIM_PID_FILE" "$SIM_WORLD_FILE"
+  signal_processes_by_pattern 'ros2 launch lrs_halmstad run_follow\.launch\.py'
+  signal_processes_by_pattern 'ros2 launch lrs_halmstad run_1to1_follow\.launch\.py'
+  signal_processes_by_pattern 'ros2 launch clearpath_nav2_demos nav2\.launch\.py'
+  signal_processes_by_pattern 'ros2 launch clearpath_nav2_demos localization\.launch\.py'
+  signal_processes_by_pattern 'ros2 launch lrs_halmstad spawn_uav_1to1\.launch\.py'
+  signal_processes_by_pattern 'ros2 launch lrs_halmstad managed_clearpath_sim\.launch\.py'
+  signal_named_nodes 'amcl|map_server|planner_server|controller_server|behavior_server|bt_navigator|waypoint_follower|velocity_smoother|smoother_server|route_server|lifecycle_manager_localization|lifecycle_manager_navigation|ugv_nav2_driver|ugv_amcl_to_odom|ugv_amcl_to_platform_odom|ugv_amcl_to_platform_filtered_odom|ugv_platform_odom_to_tf|uav_simulator|leader_detector|leader_estimator|selected_target_filter|visual_target_estimator|follow_point_generator|follow_point_planner|visual_actuation_bridge|camera_tracker'
+  signal_processes_by_pattern '(^|/)gz sim($| )'
+}
+
 trap cleanup EXIT
 
 set +u
@@ -43,6 +70,7 @@ source "$WS_ROOT/src/lrs_halmstad/clearpath/setup.bash"
 set -u
 
 mkdir -p "$STATE_DIR"
+prelaunch_safety_cleanup
 printf '%s\n' "$$" > "$SIM_PID_FILE"
 printf '%s\n' "$WORLD" > "$SIM_WORLD_FILE"
 
