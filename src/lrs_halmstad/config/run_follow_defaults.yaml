@@ -90,6 +90,7 @@ camera_tracker:
     tilt_image_center_gain: 0.26            # Slightly stronger vertical re-centering to keep the UGV better framed through weak detections.
     tilt_image_center_max_deg: 5.0          # Allow a modest extra tilt correction during recovery without making the camera twitchy.
     visual_target_estimate_timeout_s: 0.75   # Let camera_tracker use fresh TRACKED/PREDICTED/DEGRADED visual target estimates as a reacquisition fallback before dropping to stale hold.
+    prefer_visual_estimate_tilt_recovery: true  # Once direct detections drop out, let tilt recovery follow the visual target estimate earlier instead of waiting for the world-pose path to age out.
     publish_debug_topics: true          # Publish /<uav>/camera/{target,debug}/* geometry and image-centering topics.
     pose_timeout_s: 2.0                # UAV pose older than this is treated as stale; keep 1â€“4 s.
     actual_pose_reacquire_enable: false  # When estimate pose is unavailable, use the actual leader pose to re-aim the camera and recover detections.

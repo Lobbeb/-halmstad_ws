@@ -96,6 +96,9 @@ class CameraTracker(Node):
             0.0,
             float(self.declare_parameter("visual_target_estimate_timeout_s", 0.75).value),
         )
+        self.prefer_visual_estimate_tilt_recovery = coerce_bool(
+            self.declare_parameter("prefer_visual_estimate_tilt_recovery", True).value
+        )
         self.actual_pose_reacquire_enable = coerce_bool(self.declare_parameter("actual_pose_reacquire_enable", False).value)
         self.publish_debug_topics = coerce_bool(yaml_param(self, "publish_debug_topics"))
         self.gimbal_override_hold_s = max(0.0, float(yaml_param(self, "gimbal_override_hold_s")))
@@ -386,6 +389,7 @@ class CameraTracker(Node):
             f"pan_enable={self.pan_enable}, default_pan_deg={self.default_pan_deg}, "
             f"tilt_enable={self.tilt_enable}, default_tilt_deg={self.default_tilt_deg}, "
             f"image_center_correction_enable={self.image_center_correction_enable}, "
+            f"prefer_visual_estimate_tilt_recovery={self.prefer_visual_estimate_tilt_recovery}, "
             f"publish_debug_topics={self.publish_debug_topics}, "
             f"leader_look_target_m=({self.leader_look_target_x_m}, "
             f"{self.leader_look_target_y_m}, {self.camera_look_target_z_m}), "
@@ -966,6 +970,12 @@ class CameraTracker(Node):
             uav_pose,
             uav_z,
         )
+        visual_tilt_recovery = (
+            self.prefer_visual_estimate_tilt_recovery
+            and visual_leader_pose is not None
+            and visual_leader_z is not None
+            and not self.detection_is_fresh(now)
+        )
         if leader_pan_trackable:
             self.last_trackable_leader_pose = Pose2D(
                 self.leader_pose.x,
@@ -986,14 +996,22 @@ class CameraTracker(Node):
             tracked_leader_pose = self.actual_leader_pose
             tracked_leader_z = self.actual_leader_z
         if leader_tilt_trackable:
-            tilt_leader_pose = Pose2D(
-                self.leader_pose.x,
-                self.leader_pose.y,
-                self.leader_pose.yaw,
-            )
-            tilt_leader_z = float(self.leader_z)
+            if visual_tilt_recovery:
+                tilt_leader_pose = visual_leader_pose
+                tilt_leader_z = visual_leader_z
+            else:
+                tilt_leader_pose = Pose2D(
+                    self.leader_pose.x,
+                    self.leader_pose.y,
+                    self.leader_pose.yaw,
+                )
+                tilt_leader_z = float(self.leader_z)
         elif visual_leader_pose is not None and visual_leader_z is not None:
-            tilt_leader_pose = visual_leader_pose
+            tilt_leader_pose = Pose2D(
+                visual_leader_pose.x,
+                visual_leader_pose.y,
+                visual_leader_pose.yaw,
+            )
             tilt_leader_z = visual_leader_z
         elif self.last_trackable_leader_is_fresh(now):
             tilt_leader_pose = self.last_trackable_leader_pose
