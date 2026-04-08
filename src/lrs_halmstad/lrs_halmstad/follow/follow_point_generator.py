@@ -68,6 +68,14 @@ class FollowPointGenerator(Node):
         self.declare_parameter("degraded_point_alpha_scale", 0.45)
         self.declare_parameter("predicted_recovery_blend", 0.18)
         self.declare_parameter("degraded_recovery_blend", 0.42)
+        self.declare_parameter("tracked_recovery_quality_threshold", 0.55)
+        self.declare_parameter("tracked_follow_distance_scale_min", 0.82)
+        self.declare_parameter("tracked_lateral_offset_scale_min", 0.65)
+        self.declare_parameter("tracked_recovery_blend_max", 0.14)
+        self.declare_parameter("predicted_follow_distance_scale", 0.82)
+        self.declare_parameter("degraded_follow_distance_scale", 0.68)
+        self.declare_parameter("predicted_lateral_offset_scale", 0.70)
+        self.declare_parameter("degraded_lateral_offset_scale", 0.45)
 
         self.uav_name = str(self.get_parameter("uav_name").value).strip() or "dji0"
         self.target_estimate_topic = str(self.get_parameter("target_estimate_topic").value).strip()
@@ -113,6 +121,30 @@ class FollowPointGenerator(Node):
         self.degraded_point_alpha_scale = float(self.get_parameter("degraded_point_alpha_scale").value)
         self.predicted_recovery_blend = float(self.get_parameter("predicted_recovery_blend").value)
         self.degraded_recovery_blend = float(self.get_parameter("degraded_recovery_blend").value)
+        self.tracked_recovery_quality_threshold = float(
+            self.get_parameter("tracked_recovery_quality_threshold").value
+        )
+        self.tracked_follow_distance_scale_min = float(
+            self.get_parameter("tracked_follow_distance_scale_min").value
+        )
+        self.tracked_lateral_offset_scale_min = float(
+            self.get_parameter("tracked_lateral_offset_scale_min").value
+        )
+        self.tracked_recovery_blend_max = float(
+            self.get_parameter("tracked_recovery_blend_max").value
+        )
+        self.predicted_follow_distance_scale = float(
+            self.get_parameter("predicted_follow_distance_scale").value
+        )
+        self.degraded_follow_distance_scale = float(
+            self.get_parameter("degraded_follow_distance_scale").value
+        )
+        self.predicted_lateral_offset_scale = float(
+            self.get_parameter("predicted_lateral_offset_scale").value
+        )
+        self.degraded_lateral_offset_scale = float(
+            self.get_parameter("degraded_lateral_offset_scale").value
+        )
 
         if self.tick_hz <= 0.0:
             raise ValueError("tick_hz must be > 0")
@@ -148,6 +180,22 @@ class FollowPointGenerator(Node):
             raise ValueError("predicted_recovery_blend must be within [0, 1]")
         if not (0.0 <= self.degraded_recovery_blend <= 1.0):
             raise ValueError("degraded_recovery_blend must be within [0, 1]")
+        if not (0.0 <= self.tracked_recovery_quality_threshold <= 1.0):
+            raise ValueError("tracked_recovery_quality_threshold must be within [0, 1]")
+        if not (0.0 <= self.tracked_follow_distance_scale_min <= 1.0):
+            raise ValueError("tracked_follow_distance_scale_min must be within [0, 1]")
+        if not (0.0 <= self.tracked_lateral_offset_scale_min <= 1.0):
+            raise ValueError("tracked_lateral_offset_scale_min must be within [0, 1]")
+        if not (0.0 <= self.tracked_recovery_blend_max <= 1.0):
+            raise ValueError("tracked_recovery_blend_max must be within [0, 1]")
+        if not (0.0 <= self.predicted_follow_distance_scale <= 1.0):
+            raise ValueError("predicted_follow_distance_scale must be within [0, 1]")
+        if not (0.0 <= self.degraded_follow_distance_scale <= 1.0):
+            raise ValueError("degraded_follow_distance_scale must be within [0, 1]")
+        if not (0.0 <= self.predicted_lateral_offset_scale <= 1.0):
+            raise ValueError("predicted_lateral_offset_scale must be within [0, 1]")
+        if not (0.0 <= self.degraded_lateral_offset_scale <= 1.0):
+            raise ValueError("degraded_lateral_offset_scale must be within [0, 1]")
 
         now_msg = self.get_clock().now().to_msg()
         self.last_target_estimate = VisualTargetEstimate(stamp=now_msg, frame_id="", valid=False)
@@ -384,6 +432,15 @@ class FollowPointGenerator(Node):
             keep * float(raw_y) + blend * float(camera_pose.y),
         )
 
+    @staticmethod
+    def _weak_quality_fraction(quality: float, threshold: float) -> float:
+        if threshold <= 1e-6:
+            return 0.0
+        quality = max(0.0, min(1.0, float(quality)))
+        if quality >= threshold:
+            return 0.0
+        return max(0.0, min(1.0, (threshold - quality) / threshold))
+
     def _update_heading_dir(self, now: Time, dir_x: float, dir_y: float) -> None:
         norm = math.hypot(dir_x, dir_y)
         if norm <= 1e-6:
@@ -528,14 +585,28 @@ class FollowPointGenerator(Node):
                         lookahead_scale = self.degraded_lookahead_scale
                         alpha_scale = self.degraded_point_alpha_scale
                         recovery_blend = self.degraded_recovery_blend
+                        follow_distance_scale = self.degraded_follow_distance_scale
+                        lateral_offset_scale = self.degraded_lateral_offset_scale
                     elif estimate_mode == "PREDICTED":
                         lookahead_scale = self.predicted_lookahead_scale
                         alpha_scale = 0.75
                         recovery_blend = self.predicted_recovery_blend
+                        follow_distance_scale = self.predicted_follow_distance_scale
+                        lateral_offset_scale = self.predicted_lateral_offset_scale
                     else:
-                        lookahead_scale = 1.0
-                        alpha_scale = 1.0
-                        recovery_blend = 0.0
+                        weak_quality = self._weak_quality_fraction(
+                            estimate_quality,
+                            self.tracked_recovery_quality_threshold,
+                        )
+                        lookahead_scale = max(0.80, 1.0 - 0.20 * weak_quality)
+                        alpha_scale = max(0.85, 1.0 - 0.15 * weak_quality)
+                        recovery_blend = self.tracked_recovery_blend_max * weak_quality
+                        follow_distance_scale = 1.0 - weak_quality * (
+                            1.0 - self.tracked_follow_distance_scale_min
+                        )
+                        lateral_offset_scale = 1.0 - weak_quality * (
+                            1.0 - self.tracked_lateral_offset_scale_min
+                        )
                     effective_lookahead = self.lookahead_horizon_s * lookahead_scale * max(
                         0.25, estimate_quality if estimate_mode != "TRACKED" else 1.0
                     )
@@ -562,9 +633,17 @@ class FollowPointGenerator(Node):
                     )
                     follow_z = self.follow_altitude_m
                     z_delta = follow_z - leader_z
-                    horizontal_dist = horizontal_distance_for_euclidean(self.follow_distance_m, z_delta)
-                    raw_follow_x = pred_target_x - horizontal_dist * dir_x + self.lateral_offset_m * perp_x
-                    raw_follow_y = pred_target_y - horizontal_dist * dir_y + self.lateral_offset_m * perp_y
+                    effective_follow_distance = max(
+                        0.5,
+                        self.follow_distance_m * max(0.0, follow_distance_scale),
+                    )
+                    effective_lateral_offset = self.lateral_offset_m * max(0.0, lateral_offset_scale)
+                    horizontal_dist = horizontal_distance_for_euclidean(
+                        effective_follow_distance,
+                        z_delta,
+                    )
+                    raw_follow_x = pred_target_x - horizontal_dist * dir_x + effective_lateral_offset * perp_x
+                    raw_follow_y = pred_target_y - horizontal_dist * dir_y + effective_lateral_offset * perp_y
                     raw_follow_x, raw_follow_y = self._blend_follow_xy_toward_camera(
                         raw_follow_x,
                         raw_follow_y,

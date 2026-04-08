@@ -303,6 +303,8 @@ visual_follow_controller:
     loss_hold_timeout_s: 0.35       # Hold the last valid command only briefly after detection loss; longer recovery is handled upstream.
     recovery_recenter_error_norm: 0.16  # When the estimated target is this far off-centre, degraded/predicted mode suppresses forward motion and prioritises yaw re-centering.
     recovery_quality_threshold: 0.45    # When estimate quality falls below this, the controller switches into a more conservative recenter-first response.
+    tracked_forward_suppress_scale: 0.72  # Even before the estimate degrades, weak/edge-biased tracked targets suppress forward motion so yaw can recenter and preserve visibility.
+    tracked_yaw_boost_scale: 1.10         # Mild yaw boost in weak tracked mode to keep the UGV near image centre before the detector fully collapses.
     predicted_forward_suppress_scale: 0.55  # Extra forward suppression applied in PREDICTED recovery mode; lower = more yaw-first behaviour.
     degraded_forward_suppress_scale: 0.20   # Extra forward suppression applied in DEGRADED recovery mode; lower = more visibility-preserving behaviour.
     recovery_yaw_boost_scale: 1.20          # Mild yaw boost used during recovery so the UAV recentres before chasing range again.
@@ -329,6 +331,14 @@ follow_point_generator:
     degraded_point_alpha_scale: 0.45  # Slow degraded follow-point movement so the camera can recenter before the spatial target drifts too far.
     predicted_recovery_blend: 0.18   # Blend predicted follow points slightly back toward the current camera pose so recovery does not over-translate on short gaps.
     degraded_recovery_blend: 0.42    # Blend degraded follow points more strongly back toward the camera pose to preserve visibility instead of aggressively chasing.
+    tracked_recovery_quality_threshold: 0.55  # Start visibility-preserving geometry even in TRACKED mode once estimate quality drops below this threshold.
+    tracked_follow_distance_scale_min: 0.82   # Weak tracked targets bring the UAV a bit closer so the UGV stays larger in frame without a hard jump.
+    tracked_lateral_offset_scale_min: 0.65    # Reduce lateral offset during weak tracked phases so the camera recentres instead of holding side-biased geometry.
+    tracked_recovery_blend_max: 0.14          # Weak tracked follow points can blend slightly toward the camera pose before we enter true predicted/degraded recovery.
+    predicted_follow_distance_scale: 0.82     # Short-gap predicted mode keeps a slightly closer standoff to preserve recall while still moving.
+    degraded_follow_distance_scale: 0.68      # Degraded mode pulls the UAV in more noticeably so the target stays detectable instead of shrinking away.
+    predicted_lateral_offset_scale: 0.70      # Predicted mode reduces lateral bias to favour reacquisition over nominal geometry.
+    degraded_lateral_offset_scale: 0.45       # Degraded mode strongly reduces lateral bias so recovery prioritises visibility first.
 
 follow_point_planner:
   ros__parameters:
