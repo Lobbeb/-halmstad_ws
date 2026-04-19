@@ -91,6 +91,8 @@ setup(
             "export_yolo_onnx = lrs_halmstad.perception.export_yolo_onnx:main",
             "leader_detector = lrs_halmstad.perception.leader_detector:main",
             "leader_tracker = lrs_halmstad.perception.leader_tracker:main",
+            "support_detection_mux = lrs_halmstad.perception.support_detection_mux:main",
+            "dji0_to_ugv_forwarder = lrs_halmstad.perception.dji0_to_ugv_forwarder:main",
             "leader_estimator = lrs_halmstad.perception.leader_estimator:main",
             "gazebo_pose_tcp_bridge = lrs_halmstad.sim.gazebo_pose_tcp_bridge:main",
             "omnet_metrics_bridge = lrs_halmstad.sim.omnet_metrics_bridge:main",

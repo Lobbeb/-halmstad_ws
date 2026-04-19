@@ -69,6 +69,8 @@ prelaunch_safety_cleanup() {
 
 trap cleanup EXIT
 
+ORIG_ROS_DOMAIN_ID="${ROS_DOMAIN_ID-}"
+
 set +u
 # ROS setup scripts may read unset variables while initializing the environment.
 source /opt/ros/jazzy/setup.bash
@@ -82,6 +84,10 @@ colcon build --symlink-install --base-paths src
 source "$WS_ROOT/install/setup.bash"
 source "$WS_ROOT/src/lrs_halmstad/clearpath/setup.bash"
 set -u
+
+if [ -n "$ORIG_ROS_DOMAIN_ID" ]; then
+  export ROS_DOMAIN_ID="$ORIG_ROS_DOMAIN_ID"
+fi
 
 mkdir -p "$STATE_DIR"
 prelaunch_safety_cleanup
