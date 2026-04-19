@@ -158,19 +158,22 @@ with input_csv.open("r", encoding="utf-8", newline="") as handle:
 if not rows:
     raise SystemExit(f"No waypoint rows found in {input_csv}")
 
-route_waypoints = []
-for row in rows:
-    entry = {
-        "name": row["name"],
-        "x": row["x"],
-        "y": row["y"],
-        "yaw_deg": row["yaw_deg"],
-    }
-    if row["group"]:
-        entry["group"] = row["group"]
-    route_waypoints.append(entry)
+def build_route_doc(selected_rows):
+    route_waypoints = []
+    for row in selected_rows:
+        entry = {
+            "name": row["name"],
+            "x": row["x"],
+            "y": row["y"],
+            "yaw_deg": row["yaw_deg"],
+        }
+        if row["group"]:
+            entry["group"] = row["group"]
+        route_waypoints.append(entry)
+    return {"frame_id": frame_id, "waypoints": route_waypoints}
 
-route_doc = {"frame_id": frame_id, "waypoints": route_waypoints}
+
+route_doc = build_route_doc(rows)
 
 grouped = {}
 for row in rows:
@@ -189,23 +192,34 @@ def build_rviz_doc(selected_rows):
     return {"waypoints": waypoints}
 
 rviz_docs["baylands_waypoints_rviz.yaml"] = build_rviz_doc(rows)
+route_docs = {}
 for group_name, selected_rows in grouped.items():
-    filename = f"baylands_waypoints_{slugify(group_name)}_rviz.yaml"
-    rviz_docs[filename] = build_rviz_doc(selected_rows)
+    slug = slugify(group_name)
+    rviz_filename = f"baylands_waypoints_{slug}_rviz.yaml"
+    route_filename = f"baylands_waypoints_{slug}.yaml"
+    rviz_docs[rviz_filename] = build_rviz_doc(selected_rows)
+    route_docs[route_filename] = build_route_doc(selected_rows)
 
 if dry_run:
     print(f"# dry-run: would write route YAML to {route_output}")
     print(yaml.safe_dump(route_doc, sort_keys=False), end="")
+    print(f"# dry-run: would write {len(route_docs)} group route YAML file(s) to {rviz_dir}")
+    for name in sorted(route_docs):
+        print(f"#   {name}")
     print(f"# dry-run: would write {len(rviz_docs)} RViz YAML file(s) to {rviz_dir}")
     for name in sorted(rviz_docs):
         print(f"#   {name}")
     raise SystemExit(0)
 
 route_output.write_text(yaml.safe_dump(route_doc, sort_keys=False), encoding="utf-8")
+for name, doc in route_docs.items():
+    (rviz_dir / name).write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
 for name, doc in rviz_docs.items():
     (rviz_dir / name).write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
 
 print(f"[run_sync_waypoints_csv] Wrote route YAML: {route_output}")
+for name in sorted(route_docs):
+    print(f"[run_sync_waypoints_csv] Wrote group route YAML: {rviz_dir / name}")
 for name in sorted(rviz_docs):
     print(f"[run_sync_waypoints_csv] Wrote RViz YAML: {rviz_dir / name}")
 PY

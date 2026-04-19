@@ -111,9 +111,14 @@ class ContractChecker(Node):
             'UGV_CMD_TOPICS',
             f'/{ugv}/cmd_vel,/{ugv}/platform/cmd_vel',
         )
+        default_flow_topic = (
+            f'/{ugv}/ground_truth/odom'
+            if world.startswith('baylands')
+            else f'/{ugv}/amcl_pose_odom'
+        )
         flow_topics = self._csv_env(
             'REQUIRED_FLOW_TOPICS',
-            f'/{ugv}/amcl_pose_odom',
+            default_flow_topic,
         )
 
         required_topics = self._format_topics(REQUIRED_BASE_TOPICS, uav=uav, ugv=ugv, world=world)
@@ -189,7 +194,7 @@ def main(argv=None) -> None:
             '  REQUIRE_DETECTION=1            include /coord/leader_detection\n'
             '  REQUIRE_ESTIMATOR=1            include /coord/leader_estimate/*\n'
             '  REQUIRE_FLOW=1                 verify Odometry traffic on REQUIRED_FLOW_TOPICS\n'
-            '  REQUIRED_FLOW_TOPICS=<csv>     default: /<ugv>/amcl_pose_odom\n'
+            '  REQUIRED_FLOW_TOPICS=<csv>     default: /<ugv>/amcl_pose_odom (Baylands: /<ugv>/ground_truth/odom)\n'
             '  UGV_CMD_TOPICS=<csv>           default: /<ugv>/cmd_vel,/<ugv>/platform/cmd_vel'
         )
         raise SystemExit(2)

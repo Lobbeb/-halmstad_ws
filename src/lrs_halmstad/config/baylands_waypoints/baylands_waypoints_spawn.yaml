@@ -1,0 +1,22 @@
+frame_id: map
+waypoints:
+- name: spawn_0
+  x: -33.971357729652425
+  y: 91.88710198388365
+  yaw_deg: 178.14951351951302
+  group: spawn
+- name: spawn_1
+  x: -79.51719606801676
+  y: 91.27986583035636
+  yaw_deg: 178.93860863378393
+  group: spawn
+- name: spawn_2
+  x: -78.89163472640503
+  y: 81.23993093862278
+  yaw_deg: -0.9625011176401208
+  group: spawn
+- name: spawn_3
+  x: -42.65527751229109
+  y: 80.7718232925496
+  yaw_deg: -2.4723645035828614
+  group: spawn

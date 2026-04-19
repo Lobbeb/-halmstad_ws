@@ -93,6 +93,7 @@ setup(
             "leader_tracker = lrs_halmstad.perception.leader_tracker:main",
             "leader_estimator = lrs_halmstad.perception.leader_estimator:main",
             "gazebo_pose_tcp_bridge = lrs_halmstad.sim.gazebo_pose_tcp_bridge:main",
+            "gazebo_model_pose_bridge = lrs_halmstad.sim.gazebo_model_pose_bridge:main",
             "omnet_metrics_bridge = lrs_halmstad.sim.omnet_metrics_bridge:main",
             "pose_cmd_to_odom = lrs_halmstad.sim.pose_cmd_to_odom:main",
             "pose_cov_to_odom = lrs_halmstad.sim.pose_cov_to_odom:main",

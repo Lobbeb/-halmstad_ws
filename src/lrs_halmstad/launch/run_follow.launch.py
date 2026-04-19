@@ -365,6 +365,34 @@ def _build_omnet_nodes(context, *args, **kwargs):
     ]
 
 
+def _build_ugv_ground_truth_bridge_node(context, *args, **kwargs):
+    if not _launch_bool(context, 'start_ugv_ground_truth_bridge'):
+        return []
+
+    ugv_ns = LaunchConfiguration('ugv_namespace').perform(context).strip() or 'a201_0000'
+    world = LaunchConfiguration('world').perform(context).strip() or 'warehouse'
+
+    return [
+        Node(
+            package='lrs_halmstad',
+            executable='gazebo_model_pose_bridge',
+            name='ugv_ground_truth_bridge',
+            namespace=ugv_ns,
+            output='screen',
+            parameters=[{
+                'use_sim_time': True,
+                'world': world,
+                'model_name': f'{ugv_ns}/robot',
+                'pose_topic': 'ground_truth/pose',
+                'odom_topic': 'ground_truth/odom',
+                # These values are Gazebo world coordinates, not AMCL map-frame poses.
+                'frame_id': 'world',
+                'child_frame_id': 'base_link',
+            }],
+        )
+    ]
+
+
 def _build_visual_actuation_bridge_node(context, *args, **kwargs):
     if not _launch_bool(context, 'start_visual_actuation_bridge'):
         return []
@@ -427,6 +455,11 @@ def generate_launch_description():
     follow_yaw_arg = DeclareLaunchArgument('follow_yaw', default_value='true')
     publish_follow_debug_topics_arg = DeclareLaunchArgument('publish_follow_debug_topics', default_value='true')
     publish_pose_cmd_topics_arg = DeclareLaunchArgument('publish_pose_cmd_topics', default_value='true')
+    require_uav_actual_before_motion_arg = DeclareLaunchArgument(
+        'require_uav_actual_before_motion',
+        default_value='false',
+        description='Wait for /<uav>/pose before sending follow commands in odom-follow mode.',
+    )
     uav_start_x_arg = DeclareLaunchArgument(
         'uav_start_x',
         default_value=_default_world_value(
@@ -553,6 +586,18 @@ def generate_launch_description():
             "'",
         ]),
     )
+    start_ugv_ground_truth_bridge_arg = DeclareLaunchArgument(
+        'start_ugv_ground_truth_bridge',
+        default_value=_default_world_value(
+            LaunchConfiguration('world'),
+            'false',
+            'false',
+            'false',
+            'false',
+            baylands_value='true',
+        ),
+        description='Publish /<ugv_namespace>/ground_truth/(pose|odom) from Gazebo world poses.',
+    )
     ugv_use_amcl_odom_fallback_arg = DeclareLaunchArgument(
         'ugv_use_amcl_odom_fallback',
         default_value='true',
@@ -564,15 +609,27 @@ def generate_launch_description():
     )
     ugv_odom_topic_arg = DeclareLaunchArgument(
         'ugv_odom_topic',
-        default_value=['/', LaunchConfiguration('ugv_namespace'), '/amcl_pose_odom'],
+        default_value=PythonExpression([
+            "'/' + '", LaunchConfiguration('ugv_namespace'), "' + '/ground_truth/odom'"
+            " if '", LaunchConfiguration('world'), "'.startswith('baylands') else "
+            "'/' + '", LaunchConfiguration('ugv_namespace'), "' + '/amcl_pose_odom'",
+        ]),
     )
     leader_actual_pose_topic_arg = DeclareLaunchArgument(
         'leader_actual_pose_topic',
-        default_value=['/', LaunchConfiguration('ugv_namespace'), '/amcl_pose_odom'],
+        default_value=PythonExpression([
+            "'/' + '", LaunchConfiguration('ugv_namespace'), "' + '/ground_truth/odom'"
+            " if '", LaunchConfiguration('world'), "'.startswith('baylands') else "
+            "'/' + '", LaunchConfiguration('ugv_namespace'), "' + '/amcl_pose_odom'",
+        ]),
     )
     camera_leader_actual_pose_topic_arg = DeclareLaunchArgument(
         'camera_leader_actual_pose_topic',
-        default_value=['/', LaunchConfiguration('ugv_namespace'), '/platform/odom/filtered'],
+        default_value=PythonExpression([
+            "'/' + '", LaunchConfiguration('ugv_namespace'), "' + '/ground_truth/odom'"
+            " if '", LaunchConfiguration('world'), "'.startswith('baylands') else "
+            "'/' + '", LaunchConfiguration('ugv_namespace'), "' + '/platform/odom/filtered'",
+        ]),
         description='Odom-frame leader pose used by camera_tracker for camera-only reacquisition.',
     )
     leader_actual_pose_enable_arg = DeclareLaunchArgument(
@@ -591,6 +648,11 @@ def generate_launch_description():
     leader_actual_heading_topic_arg = DeclareLaunchArgument(
         'leader_actual_heading_topic',
         default_value=LaunchConfiguration('leader_actual_pose_topic'),
+    )
+    leader_heading_offset_deg_arg = DeclareLaunchArgument(
+        'leader_heading_offset_deg',
+        default_value='0.0',
+        description='Extra heading offset applied when building the behind-leader anchor in odom follow mode.',
     )
     external_detection_enable_arg = DeclareLaunchArgument(
         'external_detection_enable',
@@ -827,6 +889,11 @@ def generate_launch_description():
                 'uav_start_z': LaunchConfiguration('uav_start_z'),
                 'event_topic': LaunchConfiguration('event_topic'),
                 'follow_yaw': _bool_param('follow_yaw'),
+                'leader_heading_offset_deg': ParameterValue(
+                    LaunchConfiguration('leader_heading_offset_deg'),
+                    value_type=float,
+                ),
+                'require_uav_actual_before_motion': _bool_param('require_uav_actual_before_motion'),
                 'publish_debug_topics': _bool_param('publish_follow_debug_topics'),
                 'publish_pose_cmd_topics': _bool_param('publish_pose_cmd_topics'),
                 'start_delay_s': ParameterValue(LaunchConfiguration('uav_start_delay_s'), value_type=float),
@@ -1034,6 +1101,7 @@ def generate_launch_description():
     )
 
     omnet_nodes = OpaqueFunction(function=_build_omnet_nodes)
+    ugv_ground_truth_bridge_node = OpaqueFunction(function=_build_ugv_ground_truth_bridge_node)
 
     ugv_nav2_delayed_start = TimerAction(
         period=0.1,
@@ -1066,6 +1134,7 @@ def generate_launch_description():
         follow_yaw_arg,
         publish_follow_debug_topics_arg,
         publish_pose_cmd_topics_arg,
+        require_uav_actual_before_motion_arg,
         uav_start_x_arg,
         uav_start_y_arg,
         uav_start_z_arg,
@@ -1090,6 +1159,7 @@ def generate_launch_description():
         ugv_goal_sequence_random_reverse_arg,
         ugv_goal_sequence_relative_to_current_pose_arg,
         ugv_goal_sequence_file_arg,
+        start_ugv_ground_truth_bridge_arg,
         ugv_use_amcl_odom_fallback_arg,
         leader_pose_topic_arg,
         ugv_odom_topic_arg,
@@ -1099,6 +1169,7 @@ def generate_launch_description():
         camera_actual_pose_reacquire_enable_arg,
         leader_actual_heading_enable_arg,
         leader_actual_heading_topic_arg,
+        leader_heading_offset_deg_arg,
         external_detection_enable_arg,
         external_detection_node_arg,
         external_detection_topic_arg,
@@ -1135,6 +1206,7 @@ def generate_launch_description():
         leader_visual_actuation_bridge_status_topic_arg,
         leader_camera_actual_pose_topic_arg,
         simulator_node,
+        ugv_ground_truth_bridge_node,
         ugv_amcl_to_odom_node,
         ugv_amcl_to_platform_odom_node,
         ugv_amcl_to_platform_filtered_odom_node,

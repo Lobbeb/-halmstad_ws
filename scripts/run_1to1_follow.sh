@@ -29,6 +29,11 @@ HAVE_UAV_START_X="false"
 HAVE_UAV_START_Y="false"
 HAVE_UAV_START_YAW="false"
 HAVE_UAV_START_Z="false"
+HAVE_REQUIRE_UAV_ACTUAL_BEFORE_MOTION="false"
+HAVE_UGV_ODOM_TOPIC="false"
+HAVE_UGV_USE_AMCL_ODOM_FALLBACK="false"
+HAVE_START_UGV_GROUND_TRUTH_BRIDGE="false"
+HAVE_CAMERA_LEADER_ACTUAL_POSE_TOPIC="false"
 for arg in "$@"; do
   case "$arg" in
     camera:=*|camera_mode:=*)
@@ -63,6 +68,26 @@ for arg in "$@"; do
       ;;
     uav_start_z:=*)
       HAVE_UAV_START_Z="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    require_uav_actual_before_motion:=*)
+      HAVE_REQUIRE_UAV_ACTUAL_BEFORE_MOTION="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    ugv_odom_topic:=*)
+      HAVE_UGV_ODOM_TOPIC="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    ugv_use_amcl_odom_fallback:=*)
+      HAVE_UGV_USE_AMCL_ODOM_FALLBACK="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    start_ugv_ground_truth_bridge:=*)
+      HAVE_START_UGV_GROUND_TRUTH_BRIDGE="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    camera_leader_actual_pose_topic:=*)
+      HAVE_CAMERA_LEADER_ACTUAL_POSE_TOPIC="true"
       EXTRA_ARGS+=("$arg")
       ;;
     height:=*)
@@ -108,7 +133,35 @@ if [ "$HAVE_UAV_START_X" = "false" ] && [ "$HAVE_UAV_START_Y" = "false" ]; then
     fi
     echo "[run_1to1_follow] Using UGV-relative UAV start x=${uav_x} y=${uav_y} z=${uav_z} yaw_deg=${uav_yaw_deg}"
   else
+    if [[ "$WORLD" == baylands* ]]; then
+      echo "[run_1to1_follow] Error: could not read the live UGV pose for Baylands, so refusing to fall back to the generic UAV start (-7,0,7)." >&2
+      echo "[run_1to1_follow] Start Gazebo and the UGV first, or pass explicit uav_start_x:=... uav_start_y:=... uav_start_z:=... uav_start_yaw_deg:=..." >&2
+      exit 2
+    fi
     echo "[run_1to1_follow] Warning: could not read the live UGV pose; falling back to the launch defaults." >&2
+  fi
+fi
+
+if [ "$HAVE_REQUIRE_UAV_ACTUAL_BEFORE_MOTION" = "false" ]; then
+  EXTRA_ARGS+=("require_uav_actual_before_motion:=true")
+fi
+
+if [[ "$WORLD" == baylands* ]]; then
+  UGV_NAMESPACE="$(slam_state_namespace "$WS_ROOT" 2>/dev/null || true)"
+  if [ -z "$UGV_NAMESPACE" ]; then
+    UGV_NAMESPACE="a201_0000"
+  fi
+  if [ "$HAVE_UGV_ODOM_TOPIC" = "false" ]; then
+    EXTRA_ARGS+=("ugv_odom_topic:=/$UGV_NAMESPACE/ground_truth/odom")
+  fi
+  if [ "$HAVE_START_UGV_GROUND_TRUTH_BRIDGE" = "false" ]; then
+    EXTRA_ARGS+=("start_ugv_ground_truth_bridge:=true")
+  fi
+  if [ "$HAVE_UGV_USE_AMCL_ODOM_FALLBACK" = "false" ]; then
+    EXTRA_ARGS+=("ugv_use_amcl_odom_fallback:=false")
+  fi
+  if [ "$HAVE_CAMERA_LEADER_ACTUAL_POSE_TOPIC" = "false" ]; then
+    EXTRA_ARGS+=("camera_leader_actual_pose_topic:=/$UGV_NAMESPACE/ground_truth/odom")
   fi
 fi
 
