@@ -1,0 +1,32 @@
+frame_id: map
+waypoints:
+- name: strip_0
+  x: 54.8
+  y: -162.1
+  yaw_deg: -24.799303860015936
+  group: strip
+- name: strip_1
+  x: 138.6
+  y: -200.5
+  yaw_deg: -3.0269062989051903
+  group: strip
+- name: strip_2
+  x: 215.4
+  y: -205.1
+  yaw_deg: -16.920417747682926
+  group: strip
+- name: strip_3
+  x: 273.8
+  y: -222.5
+  yaw_deg: -29.272507648555493
+  group: strip
+- name: strip_4
+  x: 328.0
+  y: -253.1
+  yaw_deg: -30.197058846083948
+  group: strip
+- name: strip_5
+  x: 424.6
+  y: -309.9
+  yaw_deg: 69.86071816478002
+  group: strip

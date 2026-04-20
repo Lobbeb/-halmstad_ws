@@ -25,6 +25,8 @@ follow_uav:
     uav_start_z: 7.0                                 # Spawn altitude in world frame; also the nominal hover height.
     uav_start_yaw_deg: 0.0                            # Spawn yaw in degrees.
     follow_yaw: true                                   # Point the UAV body toward the leader look target; false = hold current yaw.
+    leader_heading_offset_deg: 0.0                     # Extra heading offset for odom-follow anchor placement; 180 flips "behind" to the opposite side.
+    require_uav_actual_before_motion: false           # Wait for the real UAV pose before odom-follow starts commanding; avoids chasing seeded startup defaults.
     leader_status_topic: /coord/leader_estimate_status  # Estimator status topic used for quality gating in estimate-follow mode.
 
     min_cmd_period_s: 0.05                            # Minimum interval between pose commands; keep 0.02â€“0.1 s.
@@ -61,8 +63,8 @@ follow_uav:
     state_debounce_ticks: 3                             # Consecutive ticks required before a follow-state transition commits; keep 2â€“5.
     state_machine_enable: true                           # Debounce follow-state transitions instead of switching immediately.
 
-    leader_actual_heading_enable: false                    # Use the real UGV AMCL heading for anchor placement instead of estimated heading.
-    leader_actual_heading_topic: /a201_0000/amcl_pose_odom  # AMCL odom topic used when leader_actual_heading_enable is true.
+    leader_actual_heading_enable: false                    # Use the real UGV heading for anchor placement instead of estimated heading.
+    leader_actual_heading_topic: /a201_0000/amcl_pose_odom  # Launch/world defaults may override this (Baylands uses /<ugv>/ground_truth/odom).
     estimate_heading_from_motion_enable: true              # Derive heading from estimated leader motion rather than OBB yaw.
     estimate_heading_max_dt_s: 2.0                        # Ignore heading inference if pose gaps exceed this; keep 1â€“3 s.
     estimate_heading_min_speed_mps: 0.5                 # Minimum estimated leader speed before motion-derived heading is trusted; keep 0.1â€“0.3 m/s.
@@ -177,8 +179,8 @@ leader_estimator:
     external_detection_topic: /coord/leader_detection               # Detection topic from leader_detector or leader_tracker.
     external_detection_status_topic: /coord/leader_detection_status  # Detector/tracker status used for debug image overlay only.
     leader_actual_pose_enable: true                                 # Enable truth/diagnostic leader pose input.
-    leader_actual_pose_timeout_s: 2.0                              # Truth pose older than this is treated as stale; keep 1â€“3 s.
-    leader_actual_pose_topic: /a201_0000/amcl_pose_odom           # Truth leader pose topic for diagnostics.
+    leader_actual_pose_timeout_s: 2.0                              # Truth pose older than this is treated as stale; keep 1-3 s.
+    leader_actual_pose_topic: /a201_0000/amcl_pose_odom           # Truth leader pose topic for diagnostics; Baylands overrides this to /<ugv>/ground_truth/odom.
     out_topic: /coord/leader_estimate                            # Published leader pose estimate topic.
     publish_debug_image: true                                   # Publish diagnostic overlay image.
     publish_events: true                                       # Publish estimator lifecycle events.

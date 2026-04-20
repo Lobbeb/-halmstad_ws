@@ -39,6 +39,7 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
         self.declare_parameter("world", "orchard")
         self.declare_parameter("uav_name", "dji0")
         self.declare_parameter("leader_odom_topic", "/a201_0000/amcl_pose_odom")
+        self.declare_parameter("require_uav_actual_before_motion", False)
 
         declare_yaml_param(self, "tick_hz", descriptor=dyn_num)
         declare_yaml_param(self, "d_target", descriptor=dyn_num)
@@ -78,10 +79,15 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
         declare_yaml_param(self, "camera_z_offset_m")
         declare_yaml_param(self, "leader_look_target_x_m")
         declare_yaml_param(self, "leader_look_target_y_m")
+        self.declare_parameter("leader_heading_offset_deg", 0.0)
+        self.declare_parameter("start_delay_s", 0.0)
 
         self.world = str(self.get_parameter("world").value)
         self.uav_name = str(self.get_parameter("uav_name").value)
         self.leader_odom_topic = str(self.get_parameter("leader_odom_topic").value)
+        self.require_uav_actual_before_motion = coerce_bool(
+            self.get_parameter("require_uav_actual_before_motion").value
+        )
 
         self.tick_hz = float(required_param_value(self, "tick_hz"))
         self.d_target = float(required_param_value(self, "d_target"))
@@ -126,6 +132,10 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
         self.camera_z_offset_m = float(required_param_value(self, "camera_z_offset_m"))
         self.leader_look_target_x_m = float(required_param_value(self, "leader_look_target_x_m"))
         self.leader_look_target_y_m = float(required_param_value(self, "leader_look_target_y_m"))
+        self.leader_heading_offset_rad = math.radians(
+            float(self.get_parameter("leader_heading_offset_deg").value)
+        )
+        self.start_delay_s = max(0.0, float(self.get_parameter("start_delay_s").value))
         if self.tick_hz <= 0.0:
             raise ValueError("tick_hz must be > 0")
         if self.z_min < 0.0:
@@ -162,6 +172,7 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
         self.ugv_pose = Pose2D(0.0, 0.0, 0.0)
         self.ugv_z = 0.0
         self.ugv_follow_heading = 0.0
+        self.ugv_heading_source = "uninitialized"
         self.last_ugv_stamp: Optional[Time] = None
 
         self.uav_cmd = Pose2D(self.uav_start_x, self.uav_start_y, self.uav_start_yaw)
@@ -173,10 +184,13 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
         self.have_uav_actual = False
         self.last_uav_actual_time: Optional[Time] = None
         self.last_debug_actual_yaw_unwrapped: Optional[float] = None
+        self._waiting_for_actual_pose_logged = False
 
         self.current_leader_distance_xy_m = max(0.01, self.xy_target)
         self.current_leader_distance_3d_m = math.hypot(self.current_leader_distance_xy_m, self.uav_start_z)
         self.last_cmd_time: Optional[Time] = None
+        self._start_time: Optional[Time] = None
+        self._startup_hold_logged = False
 
         self.leader_sub = self.create_subscription(
             Odometry,
@@ -231,6 +245,7 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
             f"leader_odom={self.leader_odom_topic}, tick={self.tick_hz}Hz, "
             f"d_target={self.d_target}, xy_target={self.xy_target}, xy_min={self.xy_min}, "
             f"xy_anchor_max={self.xy_anchor_max}, z_min={self.z_min}, z_max={self.z_max}, xy_max={self.xy_max}, "
+            f"require_uav_actual_before_motion={self.require_uav_actual_before_motion}, "
             f"follow_speed_mps={self.follow_speed_mps}, "
             f"follow_speed_gain={self.follow_speed_gain}, "
             f"uav_xy_command_mode={self.uav_xy_command_mode}, "
@@ -242,6 +257,7 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
             f"publish_debug_topics={self.publish_debug_topics}, publish_pose_cmd_topics={self.publish_pose_cmd_topics}, "
             f"camera_offset_m=({self.camera_x_offset_m}, {self.camera_y_offset_m}, {self.camera_z_offset_m}), "
             f"leader_look_target_xy_m=({self.leader_look_target_x_m}, {self.leader_look_target_y_m}), "
+            f"leader_heading_offset_deg={math.degrees(self.leader_heading_offset_rad):.1f}, "
             f"uav_start=({self.uav_start_x:.2f},{self.uav_start_y:.2f},{self.uav_start_z:.2f},{math.degrees(self.uav_start_yaw):.1f}deg)"
         )
         self.emit_event("FOLLOW_ODOM_NODE_START")
@@ -382,7 +398,13 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
 
         self.ugv_pose = Pose2D(float(p.x), float(p.y), yaw)
         self.ugv_z = float(p.z)
-        self.ugv_follow_heading = math.atan2(vy_world, vx_world) if speed_world > 0.05 else yaw
+        if speed_world > 0.05:
+            raw_heading = math.atan2(vy_world, vx_world)
+            self.ugv_heading_source = "velocity"
+        else:
+            raw_heading = yaw
+            self.ugv_heading_source = "yaw"
+        self.ugv_follow_heading = wrap_pi(raw_heading + self.leader_heading_offset_rad)
         self.have_ugv = True
         try:
             self.last_ugv_stamp = Time.from_msg(msg.header.stamp)
@@ -513,10 +535,15 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
             yaw_step_limit=yaw_step_limit,
             yaw_cmd_delta=yaw_cmd_delta,
             yaw_mode=yaw_mode,
+            leader_heading_source=self.ugv_heading_source,
+            leader_follow_yaw=self.ugv_follow_heading,
+            leader_estimate_yaw=self.ugv_pose.yaw,
         )
 
     def _apply_runtime_distance_update(self) -> None:
         if not self.have_ugv:
+            return
+        if self.require_uav_actual_before_motion and not self.have_uav_actual:
             return
         now = self.get_clock().now()
         current_uav = self._control_uav_pose()
@@ -558,6 +585,25 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
 
     def on_tick(self) -> None:
         now = self.get_clock().now()
+        if self.require_uav_actual_before_motion and not self.have_uav_actual:
+            if not self._waiting_for_actual_pose_logged:
+                self.get_logger().info(
+                    "[follow_uav_odom] Waiting for actual UAV pose before starting follow motion"
+                )
+                self._waiting_for_actual_pose_logged = True
+            return
+        self._waiting_for_actual_pose_logged = False
+        if self.start_delay_s > 0.0:
+            if self._start_time is None:
+                self._start_time = now
+            elapsed_s = max(0.0, (now - self._start_time).nanoseconds * 1e-9)
+            if elapsed_s < self.start_delay_s:
+                if not self._startup_hold_logged:
+                    self.get_logger().info(
+                        f"[follow_uav_odom] Start delay {self.start_delay_s:.1f}s before UAV follow motion"
+                    )
+                    self._startup_hold_logged = True
+                return
         current_uav = self._control_uav_pose()
         current_uav_z = self._control_uav_z()
         current_horizontal_distance, _current_distance_3d = self._current_follow_geometry()

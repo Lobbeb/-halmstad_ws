@@ -11,6 +11,10 @@ Current tested baseline:
 4. `./run.sh nav2`
 5. `./run.sh 1to1_follow warehouse`
 
+Current Baylands follow baseline:
+1. `./run.sh tmux_1to1 baylands`
+2. For a grouped route: `./run.sh tmux_1to1 baylands waypoint:=parkinglot_east_0 mode:=follow ugv_goal_sequence_file:=/home/ruben/halmstad_ws/src/lrs_halmstad/config/baylands_waypoints/baylands_waypoints_parkinglot_east.yaml`
+
 Current real follow launch:
 - `src/lrs_halmstad/launch/run_follow.launch.py`
 - `run_follow_motion.launch.py` and `run_1to1_follow.launch.py` are compatibility shims only
@@ -37,7 +41,7 @@ Recommended tmux workflow:
 - stop the tmux-managed stack with `./stop.sh tmux_1to1 warehouse`
 
 Current important notes:
-- the 1-to-1 odom-follow path now uses AMCL-derived `/<ugv>/amcl_pose_odom`, not raw UGV odom
+- the 1-to-1 odom-follow path uses `/<ugv>/amcl_pose_odom` by default, but Baylands now overrides this to `/<ugv>/ground_truth/odom`
 - attached/integrated gimbal camera is the only simulation camera path
 - attached-camera teleport spawns now use a non-static UAV model with a kinematic base link so the gimbal joints visibly actuate while the UAV body still follows the simulator `set_pose` path
 - Gazebo sim time is guarded by `clock_guard`, and `/clock` should have exactly one publisher
@@ -239,7 +243,7 @@ Default behavior:
 - Binds TCP server on `127.0.0.1:5555`
 - Streams snapshot data from:
   - `/a201_0000/platform/odom` as model `robot`
-  - `/dji0/pose_cmd/odom` as model `dji0`
+  - `/dji0/pose/odom` as model `dji0`
 - Auto-discovers any additional `/<model>/pose_cmd/odom` topics and exposes them as model `<model>`
 
 Override bridge parameters:
@@ -248,7 +252,7 @@ ros2 run lrs_halmstad gazebo_pose_tcp_bridge --ros-args \
   -p bind_host:=127.0.0.1 \
   -p port:=5555 \
   -p auto_discover_pose_cmd_odom:=true \
-  -p odom_topics:="['/a201_0000/platform/odom','/dji0/pose_cmd/odom']" \
+  -p odom_topics:="['/a201_0000/platform/odom','/dji0/pose/odom']" \
   -p model_names:="['robot','dji0']"
 ```
 

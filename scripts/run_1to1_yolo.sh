@@ -17,8 +17,15 @@ LEADER_RANGE_MODE="auto"
 WEIGHTS_REL=""
 MODEL_SUBDIR=""
 HAVE_UAV_START_X="false"
+HAVE_UAV_START_Y="false"
+HAVE_UAV_START_YAW="false"
 HAVE_UAV_START_Z="false"
 HAVE_LEADER_ACTUAL_POSE_ENABLE="false"
+HAVE_UGV_ODOM_TOPIC="false"
+HAVE_LEADER_ACTUAL_POSE_TOPIC="false"
+HAVE_CAMERA_LEADER_ACTUAL_POSE_TOPIC="false"
+HAVE_UGV_USE_AMCL_ODOM_FALLBACK="false"
+HAVE_START_UGV_GROUND_TRUTH_BRIDGE="false"
 HAVE_PUBLISH_FOLLOW_DEBUG_TOPICS="false"
 HAVE_PUBLISH_POSE_CMD_TOPICS="false"
 HAVE_PUBLISH_CAMERA_DEBUG_TOPICS="false"
@@ -29,6 +36,12 @@ DEFAULT_CUSTOM_WEIGHTS="detection/mymodels/warehouse_v1-v2-yolo26n.pt"
 DEFAULT_DETECTION_WEIGHTS="detection/mymodels/warehouse_v1-v2-yolo26n.pt"
 DEFAULT_OBB_WEIGHTS="obb/mymodels/warehouse-v1-yolo26n-obb.pt"
 MODELS_ROOT="${LRS_HALMSTAD_MODELS_ROOT:-$WS_ROOT/models}"
+DEFAULT_UAV_BODY_X_OFFSET="-7.0"
+DEFAULT_UAV_BODY_Y_OFFSET="0.0"
+DEFAULT_UAV_Z="7.0"
+UAV_NAME="dji0"
+
+source "$SCRIPT_DIR/slam_state_common.sh"
 
 case "$MODELS_ROOT" in
   "~")
@@ -71,6 +84,10 @@ for arg in "$@"; do
           ;;
       esac
       ;;
+    uav_name:=*)
+      UAV_NAME="${arg#uav_name:=}"
+      EXTRA_ARGS+=("$arg")
+      ;;
     weights:=*)
       WEIGHTS_REL="${arg#weights:=}"
       ;;
@@ -108,7 +125,27 @@ for arg in "$@"; do
       HAVE_LEADER_ACTUAL_POSE_ENABLE="true"
       EXTRA_ARGS+=("$arg")
       ;;
+    leader_actual_pose_topic:=*)
+      HAVE_LEADER_ACTUAL_POSE_TOPIC="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
     leader_actual_heading_topic:=*)
+      EXTRA_ARGS+=("$arg")
+      ;;
+    camera_leader_actual_pose_topic:=*)
+      HAVE_CAMERA_LEADER_ACTUAL_POSE_TOPIC="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    ugv_odom_topic:=*)
+      HAVE_UGV_ODOM_TOPIC="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    ugv_use_amcl_odom_fallback:=*)
+      HAVE_UGV_USE_AMCL_ODOM_FALLBACK="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    start_ugv_ground_truth_bridge:=*)
+      HAVE_START_UGV_GROUND_TRUTH_BRIDGE="true"
       EXTRA_ARGS+=("$arg")
       ;;
     publish_follow_debug_topics:=*)
@@ -156,6 +193,14 @@ for arg in "$@"; do
       ;;
     uav_start_x:=*)
       HAVE_UAV_START_X="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    uav_start_y:=*)
+      HAVE_UAV_START_Y="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    uav_start_yaw_deg:=*)
+      HAVE_UAV_START_YAW="true"
       EXTRA_ARGS+=("$arg")
       ;;
     uav_start_z:=*)
@@ -297,11 +342,72 @@ if [ "$USE_ESTIMATE" = true ]; then
   elif [ -n "$USE_ACTUAL_HEADING" ] && [ "$HAVE_LEADER_ACTUAL_HEADING_ENABLE" != true ]; then
     EXTRA_ARGS+=("leader_actual_heading_enable:=$USE_ACTUAL_HEADING")
   fi
-  if [ "$HAVE_UAV_START_X" != true ]; then
-    EXTRA_ARGS+=("uav_start_x:=-7.0")
+fi
+
+if [ "$HAVE_UAV_START_X" = "false" ] && [ "$HAVE_UAV_START_Y" = "false" ]; then
+  if UAV_START_ENV="$(slam_state_capture_gazebo_named_pose_env \
+    "$WORLD" \
+    "$UAV_NAME" \
+    5)"; then
+    eval "$UAV_START_ENV"
+    EXTRA_ARGS+=("uav_start_x:=$spawn_x" "uav_start_y:=$spawn_y")
+    if [ "$HAVE_UAV_START_Z" = "false" ]; then
+      EXTRA_ARGS+=("uav_start_z:=$spawn_z")
+    fi
+    if [ "$HAVE_UAV_START_YAW" = "false" ]; then
+      EXTRA_ARGS+=("uav_start_yaw_deg:=$(python3 - "$spawn_yaw" <<'PY'
+import math
+import sys
+print(f"{math.degrees(float(sys.argv[1])):.9f}")
+PY
+)")
+    fi
+    echo "[run_1to1_yolo] Using live UAV pose for simulator start x=${spawn_x} y=${spawn_y} z=${spawn_z} yaw=${spawn_yaw}"
+  elif UAV_START_ENV="$(slam_state_capture_uav_spawn_from_ugv_env \
+    "$WS_ROOT" \
+    "$WORLD" \
+    "$DEFAULT_UAV_BODY_X_OFFSET" \
+    "$DEFAULT_UAV_BODY_Y_OFFSET" \
+    "$DEFAULT_UAV_Z" \
+    5)"; then
+    eval "$UAV_START_ENV"
+    EXTRA_ARGS+=("uav_start_x:=$uav_x" "uav_start_y:=$uav_y")
+    if [ "$HAVE_UAV_START_Z" = "false" ]; then
+      EXTRA_ARGS+=("uav_start_z:=$uav_z")
+    fi
+    if [ "$HAVE_UAV_START_YAW" = "false" ]; then
+      EXTRA_ARGS+=("uav_start_yaw_deg:=$uav_yaw_deg")
+    fi
+    echo "[run_1to1_yolo] Using UGV-relative UAV start x=${uav_x} y=${uav_y} z=${uav_z} yaw_deg=${uav_yaw_deg}"
+  else
+    if [[ "$WORLD" == baylands* ]]; then
+      echo "[run_1to1_yolo] Error: could not read the live UGV pose for Baylands, so refusing to fall back to the generic UAV start (-7,0,7)." >&2
+      echo "[run_1to1_yolo] Start Gazebo and the UGV first, or pass explicit uav_start_x:=... uav_start_y:=... uav_start_z:=... uav_start_yaw_deg:=..." >&2
+      exit 2
+    fi
+    echo "[run_1to1_yolo] Warning: could not read the live UGV pose; falling back to the launch defaults." >&2
   fi
-  if [ "$HAVE_UAV_START_Z" != true ]; then
-    EXTRA_ARGS+=("uav_start_z:=7.0")
+fi
+
+if [[ "$WORLD" == baylands* ]]; then
+  UGV_NAMESPACE="$(slam_state_namespace "$WS_ROOT" 2>/dev/null || true)"
+  if [ -z "$UGV_NAMESPACE" ]; then
+    UGV_NAMESPACE="a201_0000"
+  fi
+  if [ "$HAVE_UGV_ODOM_TOPIC" != "true" ]; then
+    EXTRA_ARGS+=("ugv_odom_topic:=/$UGV_NAMESPACE/ground_truth/odom")
+  fi
+  if [ "$HAVE_LEADER_ACTUAL_POSE_TOPIC" != "true" ]; then
+    EXTRA_ARGS+=("leader_actual_pose_topic:=/$UGV_NAMESPACE/ground_truth/odom")
+  fi
+  if [ "$HAVE_CAMERA_LEADER_ACTUAL_POSE_TOPIC" != "true" ]; then
+    EXTRA_ARGS+=("camera_leader_actual_pose_topic:=/$UGV_NAMESPACE/ground_truth/odom")
+  fi
+  if [ "$HAVE_UGV_USE_AMCL_ODOM_FALLBACK" != "true" ]; then
+    EXTRA_ARGS+=("ugv_use_amcl_odom_fallback:=false")
+  fi
+  if [ "$HAVE_START_UGV_GROUND_TRUTH_BRIDGE" != "true" ]; then
+    EXTRA_ARGS+=("start_ugv_ground_truth_bridge:=true")
   fi
 fi
 

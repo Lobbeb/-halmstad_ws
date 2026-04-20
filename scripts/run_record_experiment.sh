@@ -127,6 +127,10 @@ TOPICS=(
   "/$UAV_NAME/camera0/debug/tilt_image_correction_deg"
 )
 
+if [[ "$WORLD" == baylands* ]]; then
+  TOPICS+=("/a201_0000/ground_truth/odom")
+fi
+
 if [ "$MODE" = "follow" ]; then
   TOPICS+=(
     "/$UAV_NAME/follow/target/pan_deg"
