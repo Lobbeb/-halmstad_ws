@@ -19,11 +19,14 @@ follow_uav:
     z_min: 5.0                                 # Minimum UAV altitude; controller derives max horizontal distance from d_target and this value; keep 3â€“7 m.
     xy_anchor_max: 10.0                         # Safety radius for the horizontal anchor target around the leader; keep 8â€“15 m.
 
-    seed_uav_cmd_on_start: true                   # Initialise internal command state from the startup pose before the first real pose arrives.
+    seed_uav_cmd_on_start: false                  # Ruben baseline: wait for the real UAV pose instead of moving from a startup command seed.
     uav_start_x: -7.0                              # Spawn X in world frame; overridden by the run script in yolo/estimate mode.
     uav_start_y: 0.0                                # Spawn Y in world frame.
     uav_start_z: 7.0                                 # Spawn altitude in world frame; also the nominal hover height.
     uav_start_yaw_deg: 0.0                            # Spawn yaw in degrees.
+    require_uav_actual_before_motion: true             # Do not issue follow motion until /<uav>/pose has arrived.
+    use_uav_actual_z_on_start: true                    # Latch the first real UAV altitude as the follow altitude when available.
+    start_delay_s: 0.0                                  # Optional startup hold after pose is available; keep 0 for sim unless testing launch races.
     follow_yaw: true                                   # Point the UAV body toward the leader look target; false = hold current yaw.
     leader_status_topic: /coord/leader_estimate_status  # Estimator status topic used for quality gating in estimate-follow mode.
 
@@ -44,6 +47,7 @@ follow_uav:
     follow_yaw_rate_rad_s: 0.6          # Maximum yaw rate; keep 0.3â€“1.0 rad/s.
     follow_yaw_rate_gain: 1.2            # Proportional gain from yaw error to yaw rate.
     follow_yaw_accel_rad_s2: 6.0          # Maximum yaw acceleration in rad/sÂ²; limits yaw rate ramp speed.
+    leader_heading_offset_deg: 0.0        # Optional heading offset applied to odom-follow anchor heading; leave at 0 unless the odom heading frame needs correction.
     publish_debug_topics: true             # Publish /<uav>/follow/{target,actual,error,debug} topics.
     publish_pose_cmd_topics: true           # Publish /<uav>/pose_cmd and /<uav>/pose_cmd/odom topics.
     publish_metrics: false                   # Publish legacy odom-follow metrics topics.
@@ -63,7 +67,7 @@ follow_uav:
 
     leader_actual_heading_enable: false                    # Use the real UGV AMCL heading for anchor placement instead of estimated heading.
     leader_actual_heading_topic: /a201_0000/amcl_pose_odom  # AMCL odom topic used when leader_actual_heading_enable is true.
-    estimate_heading_from_motion_enable: false             # Keep the follow anchor in the leader yaw frame; motion heading flips sides during reverse motion.
+    estimate_heading_from_motion_enable: false             # Keep the follow anchor in the leader yaw frame; motion heading can flip sides during reverse motion.
     estimate_heading_max_dt_s: 2.0                        # Ignore heading inference if pose gaps exceed this; keep 1â€“3 s.
     estimate_heading_min_speed_mps: 0.5                 # Minimum estimated leader speed before motion-derived heading is trusted; keep 0.1â€“0.3 m/s.
 
@@ -84,6 +88,7 @@ camera_tracker:
     tilt_enable: true                      # Enable geometric tilt tracking; false = hold default_tilt_deg.
     image_center_correction_enable: true    # Add image-space centering correction on top of geometry pan/tilt so the UAV camera actively re-centres weak detections.
     image_center_correction_timeout_s: 0.45  # Keep using the latest box long enough to bridge the current ~3 Hz detector cadence without over-holding stale corrections.
+    image_center_correction_max_latency_ms: 1000.0  # Do not let late detector boxes kick the gimbal; geometry/truth reacquire handles slower recovery.
     image_center_memory_timeout_s: 0.55      # After direct image correction times out, keep a small decaying memory of the last seen target direction so the camera still nudges toward reacquisition briefly.
     pan_image_center_gain: 0.22             # Slightly stronger horizontal re-centering so the target spends less time near image borders.
     pan_image_center_max_deg: 2.5           # Allow a modest extra pan correction before geometry-only tracking takes over again.
@@ -126,7 +131,7 @@ leader_detector:
     predict_hz: 60.0                         # Maximum publish rate; actual rate is capped by incoming camera frames.
     async_inference: true                     # Run inference in a worker thread so the image callback never blocks on YOLO.
     latest_frame_only: true                   # Keep only the newest pending frame while inference is busy.
-    stale_detection_threshold_ms: 500.0       # Mark detections stale if camera-stamp-to-publish latency exceeds this threshold; 0 disables.
+    stale_detection_threshold_ms: 3000.0      # CPU YOLO in WSL/sim can publish >1 s after camera stamp; keep this above observed sim latency.
     metrics_window_s: 5.0                     # Rolling window used for detector Hz reporting.
     benchmark_csv_path: ""                    # Optional CSV path for per-frame detector timing logs.
     image_qos_depth: 1                        # Detector image subscription depth; 1 keeps only the freshest frame in ROS.
@@ -156,7 +161,7 @@ leader_tracker:
     tracker_config: bytetrack.yaml                      # Tracker config filename; resolved relative to config/trackers/ or as an absolute path.
     async_inference: true                              # Run inference in a worker thread so the image callback never blocks on YOLO.
     latest_frame_only: true                            # Keep only the newest pending frame while inference is busy.
-    stale_detection_threshold_ms: 500.0                # Mark detections stale if camera-stamp-to-publish latency exceeds this threshold; 0 disables.
+    stale_detection_threshold_ms: 3000.0               # CPU YOLO in WSL/sim can publish >1 s after camera stamp; keep this above observed sim latency.
     metrics_window_s: 5.0                              # Rolling window used for detector Hz reporting.
     benchmark_csv_path: ""                             # Optional CSV path for per-frame detector timing logs.
     image_qos_depth: 1                                 # Tracker image subscription depth; 1 keeps only the freshest frame in ROS.
@@ -172,8 +177,8 @@ leader_estimator:
   ros__parameters:
     estimate_error_topic: /coord/leader_estimate_error           # Debug topic publishing estimate-vs-truth error.
     event_topic: /coord/events                                    # Topic for estimator lifecycle/debug event strings.
-    external_detection_max_latency_ms: 500.0                       # Reject detections whose camera-stamp-to-publish latency already exceeds this threshold; 0 disables.
-    external_detection_timeout_s: 1.0                              # Detections older than this are treated as stale; keep 0.5â€“2 s.
+    external_detection_max_latency_ms: 3000.0                      # Match sim CPU detector latency budget so valid tracker hits can reach the estimator.
+    external_detection_timeout_s: 2.5                              # Keep sparse CPU YOLO hits alive long enough for selected-target/follow-point handoff.
     external_detection_topic: /coord/leader_detection               # Detection topic from leader_detector or leader_tracker.
     external_detection_status_topic: /coord/leader_detection_status  # Detector/tracker status used for debug image overlay only.
     leader_actual_pose_enable: true                                 # Enable truth/diagnostic leader pose input.
@@ -318,7 +323,7 @@ visual_follow_controller:
 follow_point_generator:
   ros__parameters:
     prefer_target_pose_position: false  # false = use visual_target_estimator bearing+range for world XY (goes through selected_target_filter trust gating); true = use leader_estimator OBB world-frame pose directly (old behaviour).
-    prefer_target_pose_heading: false  # true = use OBB yaw from leader_estimator for follow heading; false = fall back to motion/anchor/view_line heading. OBB has 180Â° ambiguity â€” motion heading is more reliable.
+    prefer_target_pose_heading: false  # true = use OBB yaw from leader_estimator for follow heading; false = use visual motion/held/anchor/view-line fallback. Keep this path runtime-validated before changing reverse semantics.
     follow_distance_m: 8.0            # 3D Euclidean standoff sphere radius; horizontal component = sqrt(dÂ²âˆ’z_deltaÂ²); keep 6â€“15 m.
     follow_altitude_m: 7.0           # Target UAV world-frame altitude; used with follow_distance_m to compute horizontal standoff; keep 4â€“12 m.
     lateral_offset_m: 0.0           # Fixed lateral offset from the follow point; positive = left; keep âˆ’3 to 3 m.

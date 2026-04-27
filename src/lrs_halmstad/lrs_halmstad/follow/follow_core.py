@@ -57,7 +57,7 @@ def compute_controller_style_xy_command(
     tick_hz: float,
     speed_mps: float,
     step_scale: float = 1.0,
-    snap_tolerance: float = 1e-6,
+    snap_tolerance: float = 0.8,
 ) -> tuple[float, float]:
     dx = float(target_x) - float(current_x)
     dy = float(target_y) - float(current_y)
@@ -108,14 +108,9 @@ class FollowControllerCoreMixin:
         return self.uav_start_z
 
     def _use_cmd_state_for_control(self) -> bool:
+        # Ruben's corrected baseline drives control from the measured UAV pose.
+        # Command echo is still stored for telemetry/fallbacks, but not chased.
         return False
-        if not self.have_uav_cmd:
-            return False
-        if not self.have_uav_actual or self.last_uav_actual_time is None:
-            return True
-        if self.last_cmd_time is None:
-            return False
-        return self.last_cmd_time.nanoseconds > self.last_uav_actual_time.nanoseconds
 
     def _control_uav_pose(self) -> Pose2D:
         if self._use_cmd_state_for_control():

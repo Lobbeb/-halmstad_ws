@@ -36,7 +36,7 @@ class FollowPointGenerator(Node):
         self.declare_parameter("uav_name", "dji0")
         self.declare_parameter("target_estimate_topic", "/coord/leader_visual_target_estimate")
         self.declare_parameter("target_pose_topic", "/coord/leader_estimate")
-        self.declare_parameter("prefer_target_pose_position", True)
+        self.declare_parameter("prefer_target_pose_position", False)
         self.declare_parameter("uav_pose_topic", "")
         self.declare_parameter("camera_pose_topic", "")
         self.declare_parameter("out_topic", "/coord/leader_follow_point")
@@ -51,7 +51,7 @@ class FollowPointGenerator(Node):
         self.declare_parameter("lateral_offset_m", 0.0)
         self.declare_parameter("lookahead_horizon_s", 0.25)
         self.declare_parameter("min_target_speed_mps", 0.25)
-        self.declare_parameter("prefer_target_pose_heading", True)
+        self.declare_parameter("prefer_target_pose_heading", False)
         self.declare_parameter("target_pose_timeout_s", 0.75)
         self.declare_parameter("heading_dir_alpha", 0.25)
         self.declare_parameter("heading_hold_timeout_s", 1.0)
@@ -441,7 +441,14 @@ class FollowPointGenerator(Node):
             return 0.0
         return max(0.0, min(1.0, (threshold - quality) / threshold))
 
-    def _update_heading_dir(self, now: Time, dir_x: float, dir_y: float) -> None:
+    def _update_heading_dir(
+        self,
+        now: Time,
+        dir_x: float,
+        dir_y: float,
+        *,
+        preserve_bidirectional_continuity: bool = True,
+    ) -> None:
         norm = math.hypot(dir_x, dir_y)
         if norm <= 1e-6:
             return
@@ -449,7 +456,7 @@ class FollowPointGenerator(Node):
         next_y = float(dir_y / norm)
         if self.last_heading_dir_xy is not None:
             prev_x, prev_y = self.last_heading_dir_xy
-            if prev_x * next_x + prev_y * next_y < 0.0:
+            if preserve_bidirectional_continuity and prev_x * next_x + prev_y * next_y < 0.0:
                 next_x = -next_x
                 next_y = -next_y
             if self.heading_dir_alpha < 1.0:
@@ -506,7 +513,12 @@ class FollowPointGenerator(Node):
         if target_speed_mps >= self.min_target_speed_mps:
             dir_x = self.target_world_vx_mps / max(target_speed_mps, 1e-6)
             dir_y = self.target_world_vy_mps / max(target_speed_mps, 1e-6)
-            self._update_heading_dir(now, dir_x, dir_y)
+            self._update_heading_dir(
+                now,
+                dir_x,
+                dir_y,
+                preserve_bidirectional_continuity=False,
+            )
             return float(self.last_heading_dir_xy[0]), float(self.last_heading_dir_xy[1]), "motion_heading"
 
         held_heading = self._held_heading_dir(now)

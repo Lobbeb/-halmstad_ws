@@ -60,6 +60,9 @@ class FollowUav(FollowControllerCoreMixin, Node):
         declare_yaml_param(self, "uav_start_y")
         declare_yaml_param(self, "uav_start_z")
         declare_yaml_param(self, "uav_start_yaw_deg")
+        declare_yaml_param(self, "require_uav_actual_before_motion")
+        declare_yaml_param(self, "use_uav_actual_z_on_start")
+        declare_yaml_param(self, "start_delay_s")
         declare_yaml_param(self, "follow_yaw")
 
         # Freshness and service pacing
@@ -101,9 +104,8 @@ class FollowUav(FollowControllerCoreMixin, Node):
         declare_yaml_param(self, "traj_max_speed_mps")
         declare_yaml_param(self, "traj_max_accel_mps2")
         declare_yaml_param(self, "traj_reset_on_yaw_jump_rad")
-        # Estimate-mode already receives a tracker-stabilized pose yaw from
-        # leader_estimator. Re-deriving heading again here adds noise to the
-        # anchor frame, so keep this opt-in.
+        # Estimate-mode uses leader pose/body yaw by default. Motion heading is
+        # kept as an opt-in fallback, but must not flip the anchor on reverse.
         declare_yaml_param(self, "estimate_heading_from_motion_enable")
         declare_yaml_param(self, "estimate_heading_min_speed_mps")
         declare_yaml_param(self, "estimate_heading_max_dt_s")
@@ -149,6 +151,13 @@ class FollowUav(FollowControllerCoreMixin, Node):
         self.uav_start_y = float(required_param_value(self, "uav_start_y"))
         self.uav_start_z = float(required_param_value(self, "uav_start_z"))
         self.uav_start_yaw = math.radians(float(required_param_value(self, "uav_start_yaw_deg")))
+        self.require_uav_actual_before_motion = coerce_bool(
+            required_param_value(self, "require_uav_actual_before_motion")
+        )
+        self.use_uav_actual_z_on_start = coerce_bool(
+            required_param_value(self, "use_uav_actual_z_on_start")
+        )
+        self.start_delay_s = float(required_param_value(self, "start_delay_s"))
 
         self.follow_yaw = coerce_bool(required_param_value(self, "follow_yaw"))
 
@@ -240,6 +249,8 @@ class FollowUav(FollowControllerCoreMixin, Node):
             raise ValueError("search_min_motion_scale must be in [0,1]")
         if self.search_delay_s < 0.0:
             raise ValueError("search_delay_s must be >= 0")
+        if self.start_delay_s < 0.0:
+            raise ValueError("start_delay_s must be >= 0")
         if self.follow_yaw_rate_rad_s < 0.0:
             raise ValueError("follow_yaw_rate_rad_s must be >= 0")
         if self.follow_yaw_rate_gain < 0.0:
@@ -284,8 +295,12 @@ class FollowUav(FollowControllerCoreMixin, Node):
         self.have_uav_actual = False
         self.last_uav_actual_time: Optional[Time] = None
         self.last_debug_actual_yaw_unwrapped: Optional[float] = None
+        self._latched_uav_actual_z_on_start = False
 
         self.last_cmd_time: Optional[Time] = None
+        self._start_time: Optional[Time] = None
+        self._startup_hold_logged = False
+        self._waiting_for_actual_pose_logged = False
         self.last_leader_status_fields = {}
         self.last_leader_status_rx: Optional[Time] = None
         self.follow_state = "INIT"
@@ -384,6 +399,9 @@ class FollowUav(FollowControllerCoreMixin, Node):
             f"search_min_motion_scale={self.search_min_motion_scale}, "
             f"search_delay_s={self.search_delay_s}, "
             f"seed_uav_cmd_on_start={self.seed_uav_cmd_on_start}, "
+            f"require_uav_actual_before_motion={self.require_uav_actual_before_motion}, "
+            f"use_uav_actual_z_on_start={self.use_uav_actual_z_on_start}, "
+            f"start_delay_s={self.start_delay_s}, "
             f"uav_start=({self.uav_start_x:.2f},{self.uav_start_y:.2f},{self.uav_start_z:.2f},{math.degrees(self.uav_start_yaw):.1f}deg), "
             f"follow_yaw_rate_rad_s={self.follow_yaw_rate_rad_s}, "
             f"follow_yaw_rate_gain={self.follow_yaw_rate_gain}, "
@@ -406,6 +424,24 @@ class FollowUav(FollowControllerCoreMixin, Node):
             f"estimate_heading_min_speed_mps={self.estimate_heading_min_speed_mps}, "
             f"estimate_heading_max_dt_s={self.estimate_heading_max_dt_s}, "
             f"uav_cmd_topic=/{self.uav_name}/psdk_ros2/flight_control_setpoint_ENUposition_yaw"
+        )
+
+    def on_uav_pose(self, msg: PoseStamped) -> None:
+        super().on_uav_pose(msg)
+        if not self.use_uav_actual_z_on_start or self._latched_uav_actual_z_on_start:
+            return
+
+        self.uav_start_z = self.uav_actual_z
+        self.uav_cmd_z = self.uav_actual_z
+        self._refresh_xy_target()
+        self.current_leader_distance_xy_m = max(0.01, self.xy_target)
+        self.current_leader_distance_3d_m = math.hypot(
+            self.current_leader_distance_xy_m,
+            self.uav_start_z - self.ugv_z,
+        )
+        self._latched_uav_actual_z_on_start = True
+        self.get_logger().info(
+            f"[follow_uav] Using current UAV z as follow altitude: {self.uav_start_z:.2f}"
         )
 
     def _on_set_parameters(self, params):
@@ -707,8 +743,8 @@ class FollowUav(FollowControllerCoreMixin, Node):
         if self.leader_motion_speed_mps >= self.estimate_heading_min_speed_mps:
             raw_yaw = math.atan2(self.leader_motion_vy, self.leader_motion_vx)
             if self.leader_motion_heading_yaw is not None:
-                # Motion direction reverses by pi when the UGV backs up; the
-                # follow anchor should stay in the same leader-frame direction.
+                # Reverse travel flips velocity by pi; keep the inferred frame
+                # continuous so enabling this fallback does not swap anchor side.
                 if math.cos(raw_yaw - self.leader_motion_heading_yaw) < 0.0:
                     raw_yaw = wrap_pi(raw_yaw + math.pi)
             self.leader_motion_heading_yaw = raw_yaw
@@ -849,10 +885,13 @@ class FollowUav(FollowControllerCoreMixin, Node):
         return age <= self.pose_timeout_s
 
     def _leader_look_target_xy(self, leader_for_follow: Pose2D) -> Tuple[float, float]:
+        look_target_yaw = self.ugv_pose.yaw
+        if self.leader_actual_heading_enable and self.leader_actual_heading_is_fresh():
+            look_target_yaw = self.last_actual_heading_yaw
         target_x, target_y, _target_z = compute_leader_look_target(
             leader_for_follow.x,
             leader_for_follow.y,
-            leader_for_follow.yaw,
+            look_target_yaw,
             self.ugv_z,
             self.leader_look_target_x_m,
             self.leader_look_target_y_m,
@@ -876,6 +915,10 @@ class FollowUav(FollowControllerCoreMixin, Node):
     ) -> Tuple[float, float]:
         if search_active:
             return self._search_target_pair(leader_z)
+        if self.use_uav_actual_z_on_start and self._latched_uav_actual_z_on_start:
+            target_z = self._bounded_z_target(self.uav_start_z, leader_z)
+            target_xy = horizontal_distance_for_euclidean(self.d_target, target_z - leader_z)
+            return self._bounded_xy_target(target_xy, leader_z), target_z
         return self._nominal_target_pair(leader_z)
 
     def _target_xy_for_z(self, leader_z: float, uav_z: float) -> float:
@@ -1047,6 +1090,26 @@ class FollowUav(FollowControllerCoreMixin, Node):
 
     def on_tick(self):
         now = self.get_clock().now()
+        if self.require_uav_actual_before_motion and not self.have_uav_actual:
+            if not self._waiting_for_actual_pose_logged:
+                self.get_logger().info("[follow_uav] Waiting for UAV pose before motion")
+                self._waiting_for_actual_pose_logged = True
+            return
+        self._waiting_for_actual_pose_logged = False
+
+        if self.start_delay_s > 0.0:
+            if self._start_time is None:
+                self._start_time = now
+            elapsed_s = max(0.0, (now - self._start_time).nanoseconds * 1e-9)
+            if elapsed_s < self.start_delay_s:
+                if not self._startup_hold_logged:
+                    self.get_logger().info(
+                        f"[follow_uav] Holding commands for {self.start_delay_s:.1f}s"
+                    )
+                    self._startup_hold_logged = True
+                return
+            self._startup_hold_logged = False
+
         current_uav = self._control_uav_pose()
         current_uav_z = self._control_uav_z()
         control_dt = self._control_dt_s(now)

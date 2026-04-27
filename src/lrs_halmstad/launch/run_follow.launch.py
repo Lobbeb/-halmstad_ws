@@ -218,7 +218,8 @@ def _optional_bool_from_launch(context, name: str):
 
 
 def _build_camera_tracker_node(context, *args, **kwargs):
-    camera_params = {
+    camera_params = _load_node_params_from_yaml(context, 'camera_tracker')
+    camera_params.update({
         'use_sim_time': True,
         'uav_name': LaunchConfiguration('uav_name'),
         'leader_input_type': LaunchConfiguration('leader_mode'),
@@ -233,7 +234,7 @@ def _build_camera_tracker_node(context, *args, **kwargs):
         'camera_pan_sign': LaunchConfiguration('camera_pan_sign'),
         'actual_pose_reacquire_enable': _bool_param('camera_actual_pose_reacquire_enable'),
         'publish_debug_topics': _bool_param('publish_camera_debug_topics'),
-    }
+    })
     pan_enable = _optional_bool_from_launch(context, 'pan_enable')
     if pan_enable is not None:
         camera_params['pan_enable'] = pan_enable
@@ -248,7 +249,6 @@ def _build_camera_tracker_node(context, *args, **kwargs):
             output='screen',
             parameters=[
                 camera_params,
-                LaunchConfiguration('params_file'),
             ],
         )
     ]
@@ -362,6 +362,17 @@ def _build_visual_actuation_bridge_node(context, *args, **kwargs):
         input_mode = 'follow_point'
     elif _launch_bool(context, 'start_visual_follow_controller'):
         input_mode = 'control'
+    bridge_params = _load_node_params_from_yaml(context, 'visual_actuation_bridge')
+    bridge_params.update({
+        'use_sim_time': True,
+        'uav_name': LaunchConfiguration('uav_name'),
+        'input_mode': ParameterValue(input_mode, value_type=str),
+        'visual_control_topic': LaunchConfiguration('leader_visual_control_topic'),
+        'follow_point_topic': LaunchConfiguration('leader_follow_point_topic'),
+        'planned_target_topic': LaunchConfiguration('leader_planned_target_topic'),
+        'uav_pose_topic': LaunchConfiguration('leader_uav_pose_topic'),
+        'status_topic': LaunchConfiguration('leader_visual_actuation_bridge_status_topic'),
+    })
     return [
         Node(
             package='lrs_halmstad',
@@ -369,17 +380,7 @@ def _build_visual_actuation_bridge_node(context, *args, **kwargs):
             name='visual_actuation_bridge',
             output='screen',
             parameters=[
-                {
-                    'use_sim_time': True,
-                    'uav_name': LaunchConfiguration('uav_name'),
-                    'input_mode': ParameterValue(input_mode, value_type=str),
-                    'visual_control_topic': LaunchConfiguration('leader_visual_control_topic'),
-                    'follow_point_topic': LaunchConfiguration('leader_follow_point_topic'),
-                    'planned_target_topic': LaunchConfiguration('leader_planned_target_topic'),
-                    'uav_pose_topic': LaunchConfiguration('leader_uav_pose_topic'),
-                    'status_topic': LaunchConfiguration('leader_visual_actuation_bridge_status_topic'),
-                },
-                LaunchConfiguration('params_file'),
+                bridge_params,
             ],
         )
     ]
@@ -751,6 +752,7 @@ def generate_launch_description():
         output='screen',
         condition=_estimator_condition(),
         parameters=[
+            LaunchConfiguration('params_file'),
             {
                 'use_sim_time': True,
                 'uav_name': LaunchConfiguration('uav_name'),
@@ -765,7 +767,6 @@ def generate_launch_description():
                 'external_detection_max_latency_ms': LaunchConfiguration('detector_stale_detection_threshold_ms'),
                 'event_topic': LaunchConfiguration('event_topic'),
             },
-            LaunchConfiguration('params_file'),
         ],
     )
 
@@ -776,6 +777,7 @@ def generate_launch_description():
         output='screen',
         condition=_leader_odom_condition(),
         parameters=[
+            LaunchConfiguration('params_file'),
             {
                 'use_sim_time': True,
                 'world': LaunchConfiguration('world'),
@@ -787,7 +789,6 @@ def generate_launch_description():
                 'publish_debug_topics': _bool_param('publish_follow_debug_topics'),
                 'publish_pose_cmd_topics': _bool_param('publish_pose_cmd_topics'),
             },
-            LaunchConfiguration('params_file'),
         ],
     )
 
@@ -798,6 +799,7 @@ def generate_launch_description():
         output='screen',
         condition=_leader_nonodom_condition(),
         parameters=[
+            LaunchConfiguration('params_file'),
             {
                 'use_sim_time': True,
                 'world': LaunchConfiguration('world'),
@@ -811,7 +813,6 @@ def generate_launch_description():
                 'publish_debug_topics': _bool_param('publish_follow_debug_topics'),
                 'publish_pose_cmd_topics': _bool_param('publish_pose_cmd_topics'),
             },
-            LaunchConfiguration('params_file'),
         ],
     )
 

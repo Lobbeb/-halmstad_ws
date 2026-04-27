@@ -86,6 +86,10 @@ class CameraTracker(Node):
         self.tilt_deadband_deg = max(0.0, float(self.declare_parameter("tilt_deadband_deg", 0.0).value))
         self.image_center_correction_enable = coerce_bool(yaml_param(self, "image_center_correction_enable"))
         self.image_center_correction_timeout_s = max(0.0, float(yaml_param(self, "image_center_correction_timeout_s")))
+        self.image_center_correction_max_latency_ms = max(
+            0.0,
+            float(yaml_param(self, "image_center_correction_max_latency_ms")),
+        )
         self.image_center_memory_timeout_s = max(
             0.0,
             float(self.declare_parameter("image_center_memory_timeout_s", 0.55).value),
@@ -518,6 +522,20 @@ class CameraTracker(Node):
             parsed = decode_detection_payload(msg.data)
         except Exception:
             return
+        if parsed.detection is not None:
+            try:
+                latency_ms = float(parsed.metadata.get("camera_to_publish_latency_ms", -1.0))
+            except Exception:
+                latency_ms = -1.0
+            stale_detection = bool(parsed.metadata.get("stale_detection", False))
+            if (
+                stale_detection
+                or (
+                    self.image_center_correction_max_latency_ms > 0.0
+                    and latency_ms > self.image_center_correction_max_latency_ms
+                )
+            ):
+                return
         self.last_detection = parsed.detection
         self.last_detection_stamp = self.get_clock().now()
 

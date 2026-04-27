@@ -23,11 +23,13 @@ HAVE_PUBLISH_FOLLOW_DEBUG_TOPICS="false"
 HAVE_PUBLISH_POSE_CMD_TOPICS="false"
 HAVE_PUBLISH_CAMERA_DEBUG_TOPICS="false"
 HAVE_YOLO_DEVICE="false"
+HAVE_UGV_START_DELAY="false"
+HAVE_DETECTOR_BACKEND="false"
 USE_CONDA=""
 CONDA_ENV_NAME="${LRS_HALMSTAD_GPU_ENV_NAME:-}"
-DEFAULT_CUSTOM_WEIGHTS="detection/mymodels/warehouse_v1-v2-yolo26n.pt"
-DEFAULT_DETECTION_WEIGHTS="detection/mymodels/warehouse_v1-v2-yolo26n.pt"
-DEFAULT_OBB_WEIGHTS="obb/mymodels/warehouse-v1-yolo26n-obb.pt"
+DEFAULT_CUSTOM_WEIGHTS="warehouse_v1-v2-yolo26n.pt"
+DEFAULT_DETECTION_WEIGHTS="warehouse_v1-v2-yolo26n.pt"
+DEFAULT_OBB_WEIGHTS="warehouse-v1-yolo26n-obb.pt"
 MODELS_ROOT="${LRS_HALMSTAD_MODELS_ROOT:-$WS_ROOT/models}"
 
 case "$MODELS_ROOT" in
@@ -142,6 +144,10 @@ for arg in "$@"; do
       HAVE_YOLO_DEVICE="true"
       EXTRA_ARGS+=("yolo_device:=${arg#*:=}")
       ;;
+    detector_backend:=*)
+      HAVE_DETECTOR_BACKEND="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
     conda_env:=*)
       CONDA_ENV_NAME="${arg#conda_env:=}"
       ;;
@@ -160,6 +166,10 @@ for arg in "$@"; do
       ;;
     uav_start_z:=*)
       HAVE_UAV_START_Z="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    ugv_start_delay_s:=*)
+      HAVE_UGV_START_DELAY="true"
       EXTRA_ARGS+=("$arg")
       ;;
     omnet:=*)
@@ -291,6 +301,13 @@ if [ ! -f "$WEIGHTS_PATH" ]; then
   exit 2
 fi
 
+if [ "$HAVE_DETECTOR_BACKEND" != true ] && [ "$USE_OBB" = true ]; then
+  ONNX_CANDIDATE="${WEIGHTS_PATH%.*}.onnx"
+  if [ -f "$ONNX_CANDIDATE" ]; then
+    EXTRA_ARGS+=("detector_backend:=onnx_cpu")
+  fi
+fi
+
 if [ "$USE_ESTIMATE" = true ]; then
   if [ -z "$USE_ACTUAL_HEADING" ] && [ "$HAVE_LEADER_ACTUAL_HEADING_ENABLE" != true ]; then
     EXTRA_ARGS+=("leader_actual_heading_enable:=false")
@@ -319,6 +336,9 @@ if [ "$HAVE_PUBLISH_CAMERA_DEBUG_TOPICS" != true ]; then
 fi
 if [ "$HAVE_YOLO_DEVICE" != true ]; then
   EXTRA_ARGS+=("yolo_device:=auto")
+fi
+if [ "$HAVE_UGV_START_DELAY" != true ]; then
+  EXTRA_ARGS+=("ugv_start_delay_s:=12.0")
 fi
 
 case "$USE_CONDA" in

@@ -481,7 +481,7 @@ class VisualActuationBridge(Node):
                             step_xy_m = max_xy_step
                         else:
                             step_xy_m = dist_xy
-                        yaw_error = wrap_pi(float(follow_yaw) - self.uav_pose.yaw)
+                        yaw_error = wrap_pi(float(follow_yaw) - self.uav_pose.yaw) * self.yaw_cmd_sign
                         step_yaw_rad = self._clamp_symmetric(yaw_error, max_yaw_step)
 
                         target_x = self.uav_pose.x + dx
@@ -506,7 +506,7 @@ class VisualActuationBridge(Node):
                 reason = "control_stale"
                 if control_fresh:
                     forward_cmd = self.last_control_forward * self.forward_scale
-                    yaw_rate_cmd = self.last_control_yaw * self.yaw_scale
+                    yaw_rate_cmd = self.last_control_yaw * self.yaw_scale * self.yaw_cmd_sign
                     if abs(forward_cmd) > 1e-6 or abs(yaw_rate_cmd) > 1e-6:
                         state = "ACTIVE"
                         reason = "none"
