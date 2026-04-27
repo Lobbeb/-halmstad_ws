@@ -283,7 +283,50 @@ cleanup() {
   fi
 }
 
+signal_processes_by_pattern() {
+  local pattern="$1"
+  local pids=()
+  local pid=""
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    [ "$pid" = "$$" ] && continue
+    pids+=("$pid")
+  done < <(pgrep -f "$pattern" 2>/dev/null || true)
+  if [ "${#pids[@]}" -eq 0 ]; then
+    return 0
+  fi
+  kill -INT "${pids[@]}" 2>/dev/null || true
+  sleep 1
+  kill -TERM "${pids[@]}" 2>/dev/null || true
+  sleep 1
+  kill -KILL "${pids[@]}" 2>/dev/null || true
+}
+
+signal_named_nodes() {
+  local names_regex="$1"
+  signal_processes_by_pattern "__node:=($names_regex)(\\s|$)"
+}
+
+prelaunch_safety_cleanup() {
+  rm -f "$SIM_PID_FILE" "$SIM_WORLD_FILE"
+  signal_processes_by_pattern 'scripts/run_gazebo_sim\.sh'
+  signal_processes_by_pattern 'scripts/run_spawn_uav\.sh'
+  signal_processes_by_pattern 'scripts/run_localization\.sh'
+  signal_processes_by_pattern 'scripts/run_nav2\.sh'
+  signal_processes_by_pattern 'ros2 launch lrs_halmstad run_follow\.launch\.py'
+  signal_processes_by_pattern 'ros2 launch lrs_halmstad run_1to1_follow\.launch\.py'
+  signal_processes_by_pattern 'ros2 launch clearpath_nav2_demos nav2\.launch\.py'
+  signal_processes_by_pattern 'ros2 launch clearpath_nav2_demos localization\.launch\.py'
+  signal_processes_by_pattern 'ros2 launch lrs_halmstad spawn_uav_1to1\.launch\.py'
+  signal_processes_by_pattern 'ros2 launch lrs_halmstad managed_clearpath_sim\.launch\.py'
+  signal_processes_by_pattern '/ros_gz_bridge/(bridge_node|parameter_bridge|image_bridge)(\\s|$)'
+  signal_named_nodes 'amcl|map_server|planner_server|controller_server|behavior_server|bt_navigator|waypoint_follower|velocity_smoother|smoother_server|route_server|lifecycle_manager_localization|lifecycle_manager_navigation|ugv_nav2_driver|ugv_amcl_to_odom|ugv_amcl_to_platform_odom|ugv_amcl_to_platform_filtered_odom|ugv_platform_odom_to_tf|uav_simulator|leader_detector|leader_tracker|leader_estimator|selected_target_filter|visual_target_estimator|follow_point_generator|follow_point_planner|visual_actuation_bridge|camera_tracker'
+  signal_processes_by_pattern '(^|/)gz sim($| )'
+}
+
 trap cleanup EXIT
+
+ORIG_ROS_DOMAIN_ID="${ROS_DOMAIN_ID-}"
 
 set +u
 # ROS setup scripts may read unset variables while initializing the environment.
@@ -299,7 +342,12 @@ source "$WS_ROOT/install/setup.bash"
 source "$WS_ROOT/src/lrs_halmstad/clearpath/setup.bash"
 set -u
 
+if [ -n "$ORIG_ROS_DOMAIN_ID" ]; then
+  export ROS_DOMAIN_ID="$ORIG_ROS_DOMAIN_ID"
+fi
+
 mkdir -p "$STATE_DIR"
+prelaunch_safety_cleanup
 printf '%s\n' "$$" > "$SIM_PID_FILE"
 printf '%s\n' "$WORLD" > "$SIM_WORLD_FILE"
 if [ -n "$WAYPOINT_NAME" ]; then

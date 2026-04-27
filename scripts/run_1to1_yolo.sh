@@ -29,9 +29,14 @@ HAVE_START_UGV_GROUND_TRUTH_BRIDGE="false"
 HAVE_PUBLISH_FOLLOW_DEBUG_TOPICS="false"
 HAVE_PUBLISH_POSE_CMD_TOPICS="false"
 HAVE_PUBLISH_CAMERA_DEBUG_TOPICS="false"
-DEFAULT_CUSTOM_WEIGHTS="detection/mymodels/warehouse_v1-v2-yolo26n.pt"
-DEFAULT_DETECTION_WEIGHTS="detection/mymodels/warehouse_v1-v2-yolo26n.pt"
-DEFAULT_OBB_WEIGHTS="obb/mymodels/warehouse-v1-yolo26n-obb.pt"
+HAVE_YOLO_DEVICE="false"
+HAVE_UGV_START_DELAY="false"
+HAVE_DETECTOR_BACKEND="false"
+USE_CONDA=""
+CONDA_ENV_NAME="${LRS_HALMSTAD_GPU_ENV_NAME:-}"
+DEFAULT_CUSTOM_WEIGHTS="warehouse_v1-v2-yolo26n.pt"
+DEFAULT_DETECTION_WEIGHTS="warehouse_v1-v2-yolo26n.pt"
+DEFAULT_OBB_WEIGHTS="warehouse-v1-yolo26n-obb.pt"
 MODELS_ROOT="${LRS_HALMSTAD_MODELS_ROOT:-$WS_ROOT/models}"
 DEFAULT_UAV_BODY_X_OFFSET="-7.0"
 DEFAULT_UAV_BODY_Y_OFFSET="0.0"
@@ -172,6 +177,20 @@ for arg in "$@"; do
     tracker_config:=*)
       EXTRA_ARGS+=("$arg")
       ;;
+    device:=*|yolo_device:=*)
+      HAVE_YOLO_DEVICE="true"
+      EXTRA_ARGS+=("yolo_device:=${arg#*:=}")
+      ;;
+    detector_backend:=*)
+      HAVE_DETECTOR_BACKEND="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    conda_env:=*)
+      CONDA_ENV_NAME="${arg#conda_env:=}"
+      ;;
+    use_conda:=*)
+      USE_CONDA="${arg#use_conda:=}"
+      ;;
     range_mode:=*)
       LEADER_RANGE_MODE="${arg#range_mode:=}"
       ;;
@@ -192,6 +211,10 @@ for arg in "$@"; do
       ;;
     uav_start_z:=*)
       HAVE_UAV_START_Z="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    ugv_start_delay_s:=*)
+      HAVE_UGV_START_DELAY="true"
       EXTRA_ARGS+=("$arg")
       ;;
     omnet:=*)
@@ -249,11 +272,11 @@ case "$USE_TRACKER" in
 esac
 
 case "$LEADER_RANGE_MODE" in
-  auto|depth|ground|const)
+  auto|depth|radio|const)
     ;;
   *)
     echo "Invalid range_mode option: $LEADER_RANGE_MODE" >&2
-    echo "Use range_mode:=auto|depth|ground|const" >&2
+    echo "Use range_mode:=auto|depth|radio|const" >&2
     exit 2
     ;;
 esac
@@ -321,6 +344,13 @@ if [ ! -f "$WEIGHTS_PATH" ]; then
   echo "Resolved from weights:=${WEIGHTS_REL}" >&2
   echo "Use an existing absolute path or a path relative to: $MODELS_ROOT" >&2
   exit 2
+fi
+
+if [ "$HAVE_DETECTOR_BACKEND" != true ] && [ "$USE_OBB" = true ]; then
+  ONNX_CANDIDATE="${WEIGHTS_PATH%.*}.onnx"
+  if [ -f "$ONNX_CANDIDATE" ]; then
+    EXTRA_ARGS+=("detector_backend:=onnx_cpu")
+  fi
 fi
 
 if [ "$USE_ESTIMATE" = true ]; then
@@ -409,6 +439,44 @@ if [ "$HAVE_PUBLISH_POSE_CMD_TOPICS" != true ]; then
 fi
 if [ "$HAVE_PUBLISH_CAMERA_DEBUG_TOPICS" != true ]; then
   EXTRA_ARGS+=("publish_camera_debug_topics:=false")
+fi
+if [ "$HAVE_YOLO_DEVICE" != true ]; then
+  EXTRA_ARGS+=("yolo_device:=auto")
+fi
+if [ "$HAVE_UGV_START_DELAY" != true ]; then
+  EXTRA_ARGS+=("ugv_start_delay_s:=12.0")
+fi
+
+case "$USE_CONDA" in
+  ""|true|false)
+    ;;
+  *)
+    echo "Invalid use_conda option: $USE_CONDA" >&2
+    echo "Use use_conda:=true or use_conda:=false" >&2
+    exit 2
+    ;;
+esac
+
+activate_conda_env() {
+  local env_name="$1"
+  if [ -z "$env_name" ]; then
+    echo "Conda activation requested but no environment name was provided." >&2
+    echo "Pass conda_env:=<env> or set LRS_HALMSTAD_GPU_ENV_NAME." >&2
+    exit 2
+  fi
+  if command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook)"
+  elif [ -x /opt/anaconda3/bin/conda ]; then
+    eval "$(/opt/anaconda3/bin/conda shell.bash hook)"
+  else
+    echo "conda was not found. Expected it in PATH or at /opt/anaconda3/bin/conda." >&2
+    exit 2
+  fi
+  conda activate "$env_name"
+}
+
+if [ "$USE_CONDA" = true ] || { [ -z "$USE_CONDA" ] && [ -n "$CONDA_ENV_NAME" ]; }; then
+  activate_conda_env "$CONDA_ENV_NAME"
 fi
 
 set +u

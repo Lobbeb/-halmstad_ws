@@ -89,6 +89,9 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.image_timeout_s = float(yaml_param(self, "image_timeout_s", descriptor=dyn_num))
         self.uav_pose_timeout_s = float(yaml_param(self, "uav_pose_timeout_s", descriptor=dyn_num))
         self.external_detection_timeout_s = float(yaml_param(self, "external_detection_timeout_s", descriptor=dyn_num))
+        self.external_detection_max_latency_ms = float(
+            yaml_param(self, "external_detection_max_latency_ms", descriptor=dyn_num)
+        )
 
         self.d_target = float(yaml_param(self, "d_target", descriptor=dyn_num))
         self.declare_parameter("constant_range_m", 5.0, dyn_num)
@@ -123,6 +126,8 @@ class LeaderEstimator(EventEmitterMixin, Node):
             raise ValueError("uav_pose_timeout_s must be > 0")
         if self.external_detection_timeout_s <= 0.0:
             raise ValueError("external_detection_timeout_s must be > 0")
+        if self.external_detection_max_latency_ms < 0.0:
+            raise ValueError("external_detection_max_latency_ms must be >= 0")
         if self.leader_actual_pose_timeout_s <= 0.0:
             raise ValueError("leader_actual_pose_timeout_s must be > 0")
         if self.constant_range_m <= 0.0 and self.d_target <= 0.0:
@@ -141,6 +146,8 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.last_external_det: Optional[Detection2D] = None
         self.last_external_det_stamp: Optional[Time] = None
         self.last_external_det_rx_stamp: Optional[Time] = None
+        self.last_external_det_publish_latency_ms: float = -1.0
+        self.last_external_det_reject_reason: str = "none"
         self.last_external_det_status_text: str = ""
         self.last_camera_frame_id: str = ""
         self.last_camera_tilt_deg: Optional[float] = None
@@ -175,6 +182,11 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.last_fault_stamp: Optional[Time] = None
         self.last_debug_state: str = "INIT"
         self.last_debug_det: Optional[Detection2D] = None
+        self.audit_ticks_total = 0
+        self.audit_ok_total = 0
+        self.audit_no_det_total = 0
+        self.audit_stale_total = 0
+        self.audit_estimate_fail_total = 0
 
         # ---- estimate caching (prevent re-projection of stale detections) ----
         self._last_projected_det_rx_ns: int = -1
@@ -185,12 +197,12 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.camera_info_sub = self.create_subscription(CameraInfo, self.camera_info_topic, self.on_camera_info, 10)
         self.depth_sub = self.create_subscription(Image, self.depth_topic, self.on_depth, 10) if self.depth_topic else None
         self.uav_pose_sub = self.create_subscription(PoseStamped, self.uav_pose_topic, self.on_uav_pose, 10)
-        self.external_detection_sub = self.create_subscription(String, self.external_detection_topic, self.on_external_detection, 10)
+        self.external_detection_sub = self.create_subscription(String, self.external_detection_topic, self.on_external_detection, 1)
         self.external_detection_status_sub = self.create_subscription(
             String,
             self.external_detection_status_topic,
             self.on_external_detection_status,
-            10,
+            1,
         )
         self.follow_debug_heading_source_sub = self.create_subscription(
             String,
@@ -287,15 +299,77 @@ class LeaderEstimator(EventEmitterMixin, Node):
             return -1.0
         return max(0.0, (now - self.last_external_det_stamp).nanoseconds * 1e-6)
 
+    def _detector_publish_latency_ms(self) -> float:
+        return float(self.last_external_det_publish_latency_ms)
+
     def _detector_reason(self, now: Time) -> str:
         if self.last_external_det_stamp is None:
-            return "none"
+            return self.last_external_det_reject_reason if self.last_external_det_reject_reason != "none" else "none"
         return "ok" if self.external_detection_fresh(now) else "stale"
+
+    def _detector_status_fields(self, now: Time) -> dict[str, str]:
+        if not self.last_external_det_status_text:
+            return {}
+        if not self._is_fresh(self.last_external_det_status_stamp, self.external_detection_timeout_s, now):
+            return {}
+        return parse_status_line(self.last_external_det_status_text)
+
+    def _detector_state(self, now: Time) -> str:
+        return self._detector_status_fields(now).get("state", "na")
+
+    def _detector_status_reason(self, now: Time) -> str:
+        return self._detector_status_fields(now).get("reason", "na")
+
+    def _no_det_origin(self, now: Time) -> str:
+        if self.last_external_det_reject_reason != "none":
+            return "detector_message_rejected"
+        fields = self._detector_status_fields(now)
+        if not fields:
+            return "detector_missing" if self.last_external_det_stamp is None else "detector_stale"
+        det_state = fields.get("state", "").strip().upper()
+        if det_state == "NO_DET":
+            return "tracker_no_det"
+        if det_state == "OK":
+            return "detector_stale_to_estimator"
+        if det_state == "DECODE_FAIL":
+            return "tracker_decode_fail"
+        if det_state == "YOLO_DISABLED":
+            return "tracker_disabled"
+        return f"tracker_{det_state.lower()}" if det_state else "detector_unknown"
+
+    def _record_audit_state(self, state: str) -> None:
+        self.audit_ticks_total += 1
+        state = str(state).strip().upper()
+        if state == "OK":
+            self.audit_ok_total += 1
+        elif state == "NO_DET":
+            self.audit_no_det_total += 1
+        elif state == "STALE":
+            self.audit_stale_total += 1
+        else:
+            self.audit_estimate_fail_total += 1
+
+    def _detection_publish_latency_ms(self, metadata: dict[str, object]) -> Optional[float]:
+        raw = metadata.get("camera_to_publish_latency_ms")
+        try:
+            value = float(raw)
+        except Exception:
+            return None
+        return value if math.isfinite(value) and value >= 0.0 else None
+
+    def _detection_exceeds_latency_budget(self, metadata: dict[str, object]) -> bool:
+        if self.external_detection_max_latency_ms <= 0.0:
+            return False
+        if bool(metadata.get("stale_detection", False)):
+            return True
+        latency_ms = self._detection_publish_latency_ms(metadata)
+        return latency_ms is not None and latency_ms > self.external_detection_max_latency_ms
 
     def _fault_line(self, state: str, reason: str, now: Time) -> str:
         return (
             f"state={state} reason={reason} fault_age_ms={self._fault_age_ms(now):.1f} "
             f"detector=external detector_reason={self._detector_reason(now)} detector_age_ms={self._detector_age_ms(now):.1f} "
+            f"detector_publish_latency_ms={self._detector_publish_latency_ms():.1f} "
             f"conf={self.last_det_conf:.3f} latency_ms={self.last_latency_ms:.1f} reject_reason={self.last_reject_reason}"
         )
 
@@ -385,12 +459,18 @@ class LeaderEstimator(EventEmitterMixin, Node):
             stamp = Time(nanoseconds=stamp_ns, clock_type=self.get_clock().clock_type)
         else:
             stamp = now
+        latency_ms = self._detection_publish_latency_ms(det_msg.metadata)
+        self.last_external_det_publish_latency_ms = latency_ms if latency_ms is not None else -1.0
         # Only latch valid detections so that NO_DET frames do not erase the
         # last real detection before external_detection_timeout_s expires.
         if det_msg.detection is not None:
+            if self._detection_exceeds_latency_budget(det_msg.metadata):
+                self.last_external_det_reject_reason = "detection_publish_latency_exceeded"
+                return
             self.last_external_det_stamp = stamp
             self.last_external_det_rx_stamp = now
             self.last_external_det = det_msg.detection
+            self.last_external_det_reject_reason = "none"
 
     def on_camera_tilt(self, msg: Float32) -> None:
         self.last_camera_tilt_deg = float(msg.data)
@@ -534,6 +614,15 @@ class LeaderEstimator(EventEmitterMixin, Node):
             return float(raw_angle)
         return float(reference_angle + wrap_pi(raw_angle - reference_angle))
 
+    def _resolve_bidirectional_heading(self, raw_yaw: float) -> float:
+        yaw_a = float(raw_yaw)
+        yaw_b = wrap_pi(yaw_a + math.pi)
+        if self.prev_heading_yaw is None:
+            return yaw_a
+        yaw_a = self._unwrap_angle_near(yaw_a, self.prev_heading_yaw)
+        yaw_b = self._unwrap_angle_near(yaw_b, self.prev_heading_yaw)
+        return yaw_a if abs(yaw_a - self.prev_heading_yaw) <= abs(yaw_b - self.prev_heading_yaw) else yaw_b
+
     def _ground_point_from_pixel(self, u: float, v: float, cam: CameraModel) -> Optional[Tuple[float, float]]:
         assert self.uav_pose is not None
         x_n = (u - cam.cx) / cam.fx
@@ -577,13 +666,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
         dy = gp2[1] - gp1[1]
         if math.hypot(dx, dy) <= 1e-6:
             return None
-        yaw_a = math.atan2(dy, dx)
-        yaw_b = wrap_pi(yaw_a + math.pi)
-        if self.prev_heading_yaw is None:
-            return yaw_a
-        yaw_a = self._unwrap_angle_near(yaw_a, self.prev_heading_yaw)
-        yaw_b = self._unwrap_angle_near(yaw_b, self.prev_heading_yaw)
-        return yaw_a if abs(yaw_a - self.prev_heading_yaw) <= abs(yaw_b - self.prev_heading_yaw) else yaw_b
+        return self._resolve_bidirectional_heading(math.atan2(dy, dx))
 
     def _constant_target_range(self) -> tuple[float, str]:
         if self.d_target > 0.0:
@@ -700,7 +783,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
         heading_source = "fallback"
         yaw = self.prev_heading_yaw if self.prev_heading_yaw is not None else self.uav_pose.yaw
         if det.obb_heading_yaw is not None:
-            yaw = det.obb_heading_yaw
+            yaw = self._resolve_bidirectional_heading(det.obb_heading_yaw)
             heading_source = "obb"
         elif det.obb_corners is not None:
             obb_heading = self._obb_heading_from_corners(det.obb_corners, cam)
@@ -761,7 +844,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
         msg.vector.z = float(planar)
         self.estimate_error_pub.publish(msg)
 
-    def _status_line(self, state: str, reason: str, now: Time) -> str:
+    def _status_line(self, state: str, reason: str, now: Time, *, audit_origin: str = "none") -> str:
         reason = str(reason).strip() or "none"
         err_dx = "na" if self.last_estimate_error_dx_m is None else f"{self.last_estimate_error_dx_m:.2f}"
         err_dy = "na" if self.last_estimate_error_dy_m is None else f"{self.last_estimate_error_dy_m:.2f}"
@@ -775,11 +858,17 @@ class LeaderEstimator(EventEmitterMixin, Node):
         real_z_text = "na" if real_z is None else f"{real_z:.2f}"
         return (
             f"state={state} reason={reason} "
+            f"audit_origin={audit_origin} "
+            f"detector_state={self._detector_state(now)} detector_status_reason={self._detector_status_reason(now)} "
             f"detector_reason={self._detector_reason(now)} detector_age_ms={self._detector_age_ms(now):.1f} "
+            f"detector_publish_latency_ms={self._detector_publish_latency_ms():.1f} "
             f"conf={self.last_det_conf:.3f} latency_ms={self.last_latency_ms:.1f} "
             f"range_src={self.last_range_source} range_mode={self.range_mode} range_m={self.last_range_used_m:.2f} "
             f"bearing_deg={self.last_bearing_used_deg:.1f} reject_reason={self.last_reject_reason} "
             f"heading_src={self.last_heading_source} "
+            f"audit_ticks={self.audit_ticks_total} audit_ok={self.audit_ok_total} "
+            f"audit_no_det={self.audit_no_det_total} audit_stale={self.audit_stale_total} "
+            f"audit_estimate_fail={self.audit_estimate_fail_total} "
             f"est_d_m={est_d_text} est_xy_m={est_xy_text} "
             f"real_d_m={real_d_text} real_xy_m={real_xy_text} real_z_m={real_z_text} "
             f"err_dx_m={err_dx} err_dy_m={err_dy} err_planar_m={err_planar}"
@@ -1028,8 +1117,9 @@ class LeaderEstimator(EventEmitterMixin, Node):
             # Same detection as last projection — republish cached estimate
             self._publish_estimate(
                 self._cached_estimate_pose, now, det.track_id)
+            self._record_audit_state("OK")
             self.publish_status_msg(
-                self._status_line("OK", "estimate_cached", now))
+                self._status_line("OK", "estimate_cached", now, audit_origin="estimate_cached"))
             self.last_debug_state = "OK"
             self._publish_debug_image("OK", "estimate_cached", det)
             return
@@ -1039,7 +1129,8 @@ class LeaderEstimator(EventEmitterMixin, Node):
             self.last_range_source = "none"
             self.last_range_used_m = -1.0
             self.last_heading_source = "none"
-            self.publish_status_msg(self._status_line("STALE", "camera_info_missing", now))
+            self._record_audit_state("STALE")
+            self.publish_status_msg(self._status_line("STALE", "camera_info_missing", now, audit_origin="estimator_prereq"))
             self.publish_distance_status_msg(now)
             self._record_fault("STALE", "camera_info_missing", now)
             self._publish_debug_image("STALE", "camera_info_missing", det)
@@ -1049,7 +1140,8 @@ class LeaderEstimator(EventEmitterMixin, Node):
             self.last_range_source = "none"
             self.last_range_used_m = -1.0
             self.last_heading_source = "none"
-            self.publish_status_msg(self._status_line("STALE", "image_stale", now))
+            self._record_audit_state("STALE")
+            self.publish_status_msg(self._status_line("STALE", "image_stale", now, audit_origin="estimator_prereq"))
             self.publish_distance_status_msg(now)
             self._record_fault("STALE", "image_stale", now)
             self._publish_debug_image("STALE", "image_stale", det)
@@ -1059,7 +1151,8 @@ class LeaderEstimator(EventEmitterMixin, Node):
             self.last_range_source = "none"
             self.last_range_used_m = -1.0
             self.last_heading_source = "none"
-            self.publish_status_msg(self._status_line("STALE", "uav_pose_stale", now))
+            self._record_audit_state("STALE")
+            self.publish_status_msg(self._status_line("STALE", "uav_pose_stale", now, audit_origin="estimator_prereq"))
             self.publish_distance_status_msg(now)
             self._record_fault("STALE", "uav_pose_stale", now)
             self._publish_debug_image("STALE", "uav_pose_stale", det)
@@ -1070,7 +1163,10 @@ class LeaderEstimator(EventEmitterMixin, Node):
             self.last_range_used_m = -1.0
             self.last_heading_source = "none"
             reason = "no_detection" if self.last_external_det_stamp is not None else "detection_missing"
-            self.publish_status_msg(self._status_line("NO_DET", reason, now))
+            if self.last_external_det_reject_reason != "none":
+                reason = self.last_external_det_reject_reason
+            self._record_audit_state("NO_DET")
+            self.publish_status_msg(self._status_line("NO_DET", reason, now, audit_origin=self._no_det_origin(now)))
             self.publish_distance_status_msg(now)
             self._record_fault("NO_DET", reason, now)
             self._publish_debug_image("NO_DET", reason, None)
@@ -1082,7 +1178,8 @@ class LeaderEstimator(EventEmitterMixin, Node):
         except ValueError as exc:
             reason = str(exc) or "estimate_failed"
             self.last_heading_source = "none"
-            self.publish_status_msg(self._status_line("STALE", reason, now))
+            self._record_audit_state("STALE")
+            self.publish_status_msg(self._status_line("STALE", reason, now, audit_origin="estimator_reject"))
             self.publish_distance_status_msg(now)
             self._record_fault("STALE", reason, now)
             self._publish_debug_image("STALE", reason, det)
@@ -1090,7 +1187,8 @@ class LeaderEstimator(EventEmitterMixin, Node):
         except Exception as exc:
             reason = f"estimate_failed:{exc}"
             self.last_heading_source = "none"
-            self.publish_status_msg(self._status_line("STALE", reason, now))
+            self._record_audit_state("STALE")
+            self.publish_status_msg(self._status_line("STALE", reason, now, audit_origin="estimator_exception"))
             self.publish_distance_status_msg(now)
             self._record_fault("STALE", reason, now)
             self._publish_debug_image("STALE", reason, det)
@@ -1103,7 +1201,8 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self._last_projected_det_rx_ns = det_rx_ns
 
         self._publish_estimate(pose, now, det.track_id)
-        self.publish_status_msg(self._status_line("OK", "none", now))
+        self._record_audit_state("OK")
+        self.publish_status_msg(self._status_line("OK", "none", now, audit_origin="estimate_ok"))
         self.publish_distance_status_msg(now)
         self.last_debug_state = "OK"
         self.last_debug_det = det

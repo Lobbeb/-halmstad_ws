@@ -44,7 +44,7 @@ resolve_script_path() {
     candidate="$RUN_SCRIPTS_DIR/run_${command}.sh"
   fi
 
-  if [[ -x "$candidate" ]]; then
+  if [[ -f "$candidate" ]]; then
     printf '%s\n' "$candidate"
     return 0
   fi
@@ -71,4 +71,7 @@ if ! script_path="$(resolve_script_path "$1")"; then
 fi
 
 shift
+if [[ "$script_path" == *.sh ]] || [[ ! -x "$script_path" ]]; then
+  exec bash "$script_path" "$@"
+fi
 exec "$script_path" "$@"

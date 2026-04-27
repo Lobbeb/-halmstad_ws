@@ -32,21 +32,6 @@ launch_running() {
   kill -0 "$LAUNCH_PID" 2>/dev/null
 }
 
-launch_group_running() {
-  local launch_pgid
-
-  if ! launch_running; then
-    return 1
-  fi
-
-  launch_pgid="$(ps -o pgid= -p "$LAUNCH_PID" 2>/dev/null | tr -d ' ')"
-  if [ -z "$launch_pgid" ]; then
-    return 1
-  fi
-
-  /bin/kill -0 -- "-$launch_pgid" 2>/dev/null
-}
-
 stop_launch_group() {
   local signal="$1"
   local timeout_s="$2"
@@ -93,7 +78,7 @@ trap cleanup INT TERM EXIT
 
 if sim_helper_running; then
   FOLLOW_SIM=true
-  echo "[run_spawn_uav] Gazebo helper detected; stopping this launcher when the sim helper exits."
+  echo "[run_support_follow_odom] Gazebo helper detected; stopping this overlay when the sim helper exits."
 fi
 
 DEFAULT_WORLD="warehouse"
@@ -110,43 +95,9 @@ if [ "$#" -gt 0 ] && [[ "$1" != *":="* ]] && [[ "$1" != *=* ]]; then
   shift
 fi
 
-ARGS=()
-for arg in "$@"; do
-  case "$arg" in
-    camera:=*)
-      camera_mode="${arg#camera:=}"
-      case "$camera_mode" in
-        attached|integrated|integrated_joint)
-          ARGS+=("uav_camera_mode:=integrated_joint")
-          ;;
-        detached|detached_model)
-          echo "Detached camera mode has been removed from simulation. Use camera:=attached." >&2
-          exit 2
-          ;;
-        *)
-          ARGS+=("uav_camera_mode:=$camera_mode")
-          ;;
-      esac
-      ;;
-    name:=*)
-      ARGS+=("uav_name:=${arg#name:=}")
-      ;;
-    height:=*)
-      ARGS+=("z:=${arg#height:=}")
-      ;;
-    mount_pitch_deg:=*)
-      ARGS+=("camera_pitch_offset_deg:=${arg#mount_pitch_deg:=}")
-      ;;
-    *)
-      ARGS+=("$arg")
-      ;;
-  esac
-done
-
 ORIG_ROS_DOMAIN_ID="${ROS_DOMAIN_ID-}"
 
 set +u
-# ROS setup scripts may read unset variables while initializing the environment.
 source /opt/ros/jazzy/setup.bash
 source "$WS_ROOT/install/setup.bash"
 source "$WS_ROOT/src/lrs_halmstad/clearpath/setup.bash"
@@ -156,18 +107,23 @@ if [ -n "$ORIG_ROS_DOMAIN_ID" ]; then
   export ROS_DOMAIN_ID="$ORIG_ROS_DOMAIN_ID"
 fi
 
-setsid ros2 launch lrs_halmstad spawn_uav_1to1.launch.py world:="$WORLD" "${ARGS[@]}" &
+echo "[run_support_follow_odom] Overlaying dji1+dji2 support-follow on top of the trusted 1-to-1 baseline."
+if ! ros2 topic list 2>/dev/null | grep -qx '/dji0/pose'; then
+  echo "[run_support_follow_odom] Warning: /dji0/pose is not visible yet. Start the trusted 1-to-1 baseline first." >&2
+fi
+
+setsid ros2 launch lrs_halmstad support_follow_odom.launch.py world:="$WORLD" "$@" &
 LAUNCH_PID=$!
 
 if [ "$FOLLOW_SIM" = true ]; then
   (
     while launch_running; do
       if ! sim_helper_running; then
-        echo "[run_spawn_uav] Gazebo helper exited; stopping UAV launcher."
+        echo "[run_support_follow_odom] Gazebo helper exited; stopping overlay."
         stop_launch_group INT 5
         stop_launch_group TERM 3
         if launch_running; then
-          echo "[run_spawn_uav] UAV launcher ignored shutdown signals; forcing exit."
+          echo "[run_support_follow_odom] Overlay ignored shutdown signals; forcing exit."
           stop_launch_group KILL 0
         fi
         exit 0
