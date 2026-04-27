@@ -108,6 +108,7 @@ class FollowControllerCoreMixin:
         return self.uav_start_z
 
     def _use_cmd_state_for_control(self) -> bool:
+        return False
         if not self.have_uav_cmd:
             return False
         if not self.have_uav_actual or self.last_uav_actual_time is None:
@@ -146,10 +147,7 @@ class FollowControllerCoreMixin:
         *,
         speed_mps: float,
     ) -> tuple[float, float]:
-        mode = str(getattr(self, "uav_xy_command_mode", "direct")).strip().lower()
         step_scale = 1.0
-        if mode == "controller_step":
-            step_scale = float(getattr(self, "uav_xy_command_step_scale", 0.6))
         return compute_controller_style_xy_command(
             current_uav.x,
             current_uav.y,

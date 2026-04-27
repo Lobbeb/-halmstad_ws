@@ -1,8 +1,10 @@
 # Halmstad ROS 2 + Gazebo Testbed — Workspace Snapshot
 Current source of truth
 -----------------------
+- `AGENT.md`
 - `CURRENT_STATE.md`
 - `RUNNING_SIM.md`
+- `src/lrs_halmstad/README.md`
 
 Current tested baseline:
 1. `./run.sh gazebo_sim warehouse`
@@ -14,6 +16,21 @@ Current tested baseline:
 Current Baylands follow baseline:
 1. `./run.sh tmux_1to1 baylands`
 2. For a grouped route: `./run.sh tmux_1to1 baylands waypoint:=parkinglot_east_0 mode:=follow ugv_goal_sequence_file:=/home/ruben/halmstad_ws/src/lrs_halmstad/config/baylands_waypoints/baylands_waypoints_parkinglot_east.yaml`
+
+Baylands Nav2 map quick notes:
+- Supported Baylands Nav2 maps are `maps/baylands_finished_v3_nav_20cm.yaml` and `maps/baylands_finished_v3_nav_20cm_merged.yaml`.
+- These maps are intentionally pose-compatible and share the same `resolution: 0.200`, `origin: [-227, -444.5, 0.0]`, `mode: trinary`, `occupied_thresh: 0.65`, and `free_thresh: 0.196`.
+- The Nav2 map was made by taking a pose-compatible Baylands base map, editing the PGM in GIMP at the same canvas size, and exporting a full-resolution trinary image.
+- Keep the map to three tones only: white for free road, black for blocked/occupied space, and gray for unknown or non-committal areas.
+- We mainly used extra black paint to block bad or bumpy routes that Nav2 should stop trying to drive through.
+- If you make a new Baylands variant, align it to the pose-compatible base first and do not change the canvas size, origin, or resolution unless you are intentionally rebuilding the map frame.
+- Validate new Baylands maps in RViz by checking the map against AMCL and the live scan overlay before switching any defaults.
+
+Baylands waypoint files:
+- `maps/waypoints_baylands.csv` is the main flat waypoint list.
+- `maps/waypoints_baylands_groups.csv` is the grouped list used for named Baylands areas such as `parkinglot_east_*`, `strip_*`, and `art_*`.
+- `./run.sh save_waypoint_csv ...` writes captured Gazebo and AMCL poses back to the CSV files.
+- `./run.sh save_waypoint_yaml ...` writes Nav2-ready YAML waypoint files, usually under `src/lrs_halmstad/config/baylands_waypoints/`.
 
 Current real follow launch:
 - `src/lrs_halmstad/launch/run_follow.launch.py`

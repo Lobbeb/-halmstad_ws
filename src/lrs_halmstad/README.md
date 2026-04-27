@@ -2,6 +2,8 @@
 
 Reference for the current 1-to-1 Gazebo/ROS 2 workflow.
 
+For repo-level conventions and handoff notes, also read `../../AGENT.md`.
+
 Current real follow launch:
 - `run_follow.launch.py`
 
@@ -125,6 +127,40 @@ cd /home/ruben/halmstad_ws
 ./run.sh 1to1_follow baylands \
   ugv_goal_sequence_file:=/home/ruben/halmstad_ws/src/lrs_halmstad/config/baylands_waypoints/baylands_waypoints_parkinglot_east.yaml
 ```
+
+## Baylands Nav2 map maintenance
+
+The active Baylands Nav2 maps are:
+- `maps/baylands_finished_v3_nav_20cm.yaml`
+- `maps/baylands_finished_v3_nav_20cm_merged.yaml`
+
+Both are intended to stay pose-compatible. Keep these values unchanged unless you are intentionally rebuilding the Baylands map frame:
+- `resolution: 0.200`
+- `origin: [-227, -444.5, 0.0]`
+- `mode: trinary`
+- `occupied_thresh: 0.65`
+- `free_thresh: 0.196`
+
+Current Baylands map workflow:
+- Start from the pose-compatible Baylands base map, not a fresh arbitrary export.
+- Edit the PGM in GIMP at the same canvas size so the map frame stays aligned with the saved AMCL poses and Baylands waypoint files.
+- Keep the image trinary: white for free road, black for blocked/occupied areas, and gray for unknown or "do not rely on this" terrain.
+- Add black where the UGV should not drive, especially on narrow, bumpy, or misleading side paths.
+- Export the final image as a full-resolution PGM and keep the YAML metadata matched to the same pose-compatible base.
+- Test in RViz with localization running and compare the Baylands map against AMCL plus the live scan overlay before changing defaults in scripts.
+
+## Baylands waypoint authoring
+
+Useful Baylands waypoint sources:
+- `maps/waypoints_baylands.csv` for the flat list.
+- `maps/waypoints_baylands_groups.csv` for grouped Baylands areas used by `waypoint:=...` and grouped route launches.
+- `config/baylands_waypoints/` for Nav2-ready YAML routes such as `baylands_waypoints_strip.yaml` and `baylands_waypoints_parkinglot_east.yaml`.
+
+Helpful scripts:
+- `./run.sh save_waypoint_csv <name> output:=waypoints_baylands_groups.csv group:=strip`
+- `./run.sh save_waypoint_yaml <name> output:=src/lrs_halmstad/config/baylands_waypoints/baylands_waypoints_strip.yaml group:=strip`
+
+These helpers read the current Gazebo pose plus the current AMCL pose, then save them in the formats used by the Baylands spawn and Nav2 pipelines.
 
 For standalone Nav2 testing without RViz goals:
 
