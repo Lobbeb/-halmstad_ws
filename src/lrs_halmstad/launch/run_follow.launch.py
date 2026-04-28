@@ -204,6 +204,17 @@ def _bool_param(name: str) -> ParameterValue:
     return ParameterValue(LaunchConfiguration(name), value_type=bool)
 
 
+def _visual_follow_logic_follow_core_param() -> ParameterValue:
+    return ParameterValue(
+        PythonExpression([
+            "'",
+            LaunchConfiguration('visual_follow_logic'),
+            "'.lower() in ('follow_core', 'integrated')",
+        ]),
+        value_type=bool,
+    )
+
+
 def _optional_bool_from_launch(context, name: str):
     raw = LaunchConfiguration(name).perform(context).strip().lower()
     if raw == "":
@@ -367,6 +378,7 @@ def _build_visual_actuation_bridge_node(context, *args, **kwargs):
         'use_sim_time': True,
         'uav_name': LaunchConfiguration('uav_name'),
         'input_mode': ParameterValue(input_mode, value_type=str),
+        'follow_core_alignment_enable': _visual_follow_logic_follow_core_param(),
         'visual_control_topic': LaunchConfiguration('leader_visual_control_topic'),
         'follow_point_topic': LaunchConfiguration('leader_follow_point_topic'),
         'planned_target_topic': LaunchConfiguration('leader_planned_target_topic'),
@@ -530,7 +542,7 @@ def generate_launch_description():
         'leader_uav_pose_topic',
         default_value=['/', LaunchConfiguration('uav_name'), '/pose'],
     )
-    leader_range_mode_arg = DeclareLaunchArgument('leader_range_mode', default_value='auto')
+    leader_range_mode_arg = DeclareLaunchArgument('leader_range_mode', default_value='')
     target_class_name_arg = DeclareLaunchArgument('target_class_name', default_value='')
     target_class_id_arg = DeclareLaunchArgument('target_class_id', default_value='-1')
     yolo_weights_arg = DeclareLaunchArgument(
@@ -587,6 +599,21 @@ def generate_launch_description():
         'start_visual_follow_planner',
         default_value='false',
         description='Start the planner that smooths the follow point into a planned pose target for the bridge',
+    )
+    follow_point_prefer_target_pose_heading_arg = DeclareLaunchArgument(
+        'follow_point_prefer_target_pose_heading',
+        default_value='false',
+        description='Let follow_point_generator use the target pose yaw as the follow heading source',
+    )
+    follow_point_prefer_target_pose_position_arg = DeclareLaunchArgument(
+        'follow_point_prefer_target_pose_position',
+        default_value='false',
+        description='Let follow_point_generator use the target pose position as the follow target source',
+    )
+    visual_follow_logic_arg = DeclareLaunchArgument(
+        'visual_follow_logic',
+        default_value='legacy',
+        description='Visual pipeline follow behavior: legacy or follow_core',
     )
     leader_selected_target_topic_arg = DeclareLaunchArgument(
         'leader_selected_target_topic',
@@ -760,7 +787,7 @@ def generate_launch_description():
                 'camera_info_topic': LaunchConfiguration('leader_camera_info_topic'),
                 'depth_topic': LaunchConfiguration('leader_depth_topic'),
                 'uav_pose_topic': LaunchConfiguration('leader_uav_pose_topic'),
-                'range_mode': LaunchConfiguration('leader_range_mode'),
+                'leader_range_mode': LaunchConfiguration('leader_range_mode'),
                 'leader_actual_pose_topic': LaunchConfiguration('leader_actual_pose_topic'),
                 'leader_actual_pose_enable': _bool_param('leader_actual_pose_enable'),
                 'external_detection_topic': LaunchConfiguration('external_detection_topic'),
@@ -871,6 +898,11 @@ def generate_launch_description():
                 'status_topic': LaunchConfiguration('leader_follow_point_status_topic'),
             },
             LaunchConfiguration('params_file'),
+            {
+                'prefer_target_pose_position': _bool_param('follow_point_prefer_target_pose_position'),
+                'prefer_target_pose_heading': _bool_param('follow_point_prefer_target_pose_heading'),
+                'follow_core_alignment_enable': _visual_follow_logic_follow_core_param(),
+            },
         ],
     )
 
@@ -888,6 +920,7 @@ def generate_launch_description():
                 'uav_pose_topic': LaunchConfiguration('leader_uav_pose_topic'),
                 'out_topic': LaunchConfiguration('leader_planned_target_topic'),
                 'status_topic': LaunchConfiguration('leader_planned_target_status_topic'),
+                'follow_core_alignment_enable': _visual_follow_logic_follow_core_param(),
             },
             LaunchConfiguration('params_file'),
         ],
@@ -1082,6 +1115,9 @@ def generate_launch_description():
         start_visual_actuation_bridge_arg,
         start_visual_follow_point_generator_arg,
         start_visual_follow_planner_arg,
+        follow_point_prefer_target_pose_heading_arg,
+        follow_point_prefer_target_pose_position_arg,
+        visual_follow_logic_arg,
         leader_selected_target_topic_arg,
         leader_selected_target_filtered_topic_arg,
         leader_selected_target_filtered_status_topic_arg,

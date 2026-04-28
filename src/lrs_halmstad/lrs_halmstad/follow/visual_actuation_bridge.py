@@ -16,6 +16,7 @@ from lrs_halmstad.common.visual_target_estimate import (
     VisualTargetEstimate,
     decode_visual_target_estimate_msg,
 )
+from lrs_halmstad.follow.follow_core import compute_controller_style_xy_command
 from lrs_halmstad.follow.follow_math import Pose2D, coerce_bool, quat_from_yaw, wrap_pi, yaw_from_quat
 
 
@@ -35,6 +36,7 @@ class VisualActuationBridge(Node):
         self.declare_parameter("out_topic", "")
         self.declare_parameter("pose_cmd_topic", "")
         self.declare_parameter("status_topic", "/coord/leader_visual_actuation_bridge_status")
+        self.declare_parameter("follow_core_alignment_enable", False)
         self.declare_parameter("tick_hz", 20.0)
         self.declare_parameter("control_timeout_s", 0.5)
         self.declare_parameter("follow_point_timeout_s", 0.5)
@@ -44,6 +46,9 @@ class VisualActuationBridge(Node):
         self.declare_parameter("yaw_scale", 1.0)
         self.declare_parameter("max_xy_step_m", 0.25)
         self.declare_parameter("max_yaw_step_rad", 0.20)
+        self.declare_parameter("follow_speed_mps", 3.0)
+        self.declare_parameter("follow_speed_gain", 1.2)
+        self.declare_parameter("follow_core_step_scale", 1.0)
         self.declare_parameter("publish_pose_cmd_mirror", True)
         self.declare_parameter("use_current_altitude", False)
         self.declare_parameter("fixed_z_m", 7.0)
@@ -73,6 +78,9 @@ class VisualActuationBridge(Node):
             or f"/{self.uav_name}/pose_cmd"
         )
         self.status_topic = str(self.get_parameter("status_topic").value).strip()
+        self.follow_core_alignment_enable = coerce_bool(
+            self.get_parameter("follow_core_alignment_enable").value
+        )
         self.tick_hz = float(self.get_parameter("tick_hz").value)
         self.control_timeout_s = float(self.get_parameter("control_timeout_s").value)
         self.follow_point_timeout_s = float(self.get_parameter("follow_point_timeout_s").value)
@@ -82,6 +90,9 @@ class VisualActuationBridge(Node):
         self.yaw_scale = float(self.get_parameter("yaw_scale").value)
         self.max_xy_step_m = float(self.get_parameter("max_xy_step_m").value)
         self.max_yaw_step_rad = float(self.get_parameter("max_yaw_step_rad").value)
+        self.follow_speed_mps = float(self.get_parameter("follow_speed_mps").value)
+        self.follow_speed_gain = float(self.get_parameter("follow_speed_gain").value)
+        self.follow_core_step_scale = float(self.get_parameter("follow_core_step_scale").value)
         self.publish_pose_cmd_mirror = coerce_bool(self.get_parameter("publish_pose_cmd_mirror").value)
         self.use_current_altitude = coerce_bool(self.get_parameter("use_current_altitude").value)
         self.fixed_z_m = float(self.get_parameter("fixed_z_m").value)
@@ -112,6 +123,12 @@ class VisualActuationBridge(Node):
             raise ValueError("max_xy_step_m must be >= 0")
         if self.max_yaw_step_rad < 0.0:
             raise ValueError("max_yaw_step_rad must be >= 0")
+        if self.follow_speed_mps < 0.0:
+            raise ValueError("follow_speed_mps must be >= 0")
+        if self.follow_speed_gain < 0.0:
+            raise ValueError("follow_speed_gain must be >= 0")
+        if self.follow_core_step_scale < 0.0:
+            raise ValueError("follow_core_step_scale must be >= 0")
 
         self.have_pose = False
         self.uav_pose = Pose2D(0.0, 0.0, 0.0)
@@ -150,6 +167,7 @@ class VisualActuationBridge(Node):
             f"follow_point={self.follow_point_topic}, planned_target={self.planned_target_topic}, "
             f"uav_pose={self.uav_pose_topic}, "
             f"out={self.out_topic}, pose_cmd={self.pose_cmd_topic}, "
+            f"follow_core_alignment={self.follow_core_alignment_enable}, "
             f"publish_pose_cmd_mirror={self.publish_pose_cmd_mirror}"
         )
 
@@ -287,6 +305,7 @@ class VisualActuationBridge(Node):
         )
         msg = String()
         msg.data = (
+            f"logic={'follow_core' if self.follow_core_alignment_enable else 'legacy'} "
             f"input_mode={self.input_mode} "
             f"active_input={active_input} "
             f"state={state} "
@@ -313,6 +332,34 @@ class VisualActuationBridge(Node):
             f"target_yaw={'na' if target_yaw is None else f'{target_yaw:.3f}'}"
         )
         self.status_pub.publish(msg)
+
+    def _xy_command_toward(self, target_x: float, target_y: float, step_scale: float) -> tuple[float, float, float]:
+        dx = float(target_x) - self.uav_pose.x
+        dy = float(target_y) - self.uav_pose.y
+        dist_xy = math.hypot(dx, dy)
+        if self.follow_core_alignment_enable:
+            speed_mps = min(
+                self.follow_speed_mps,
+                self.follow_speed_gain * max(dist_xy, 0.0),
+            )
+            cmd_x, cmd_y = compute_controller_style_xy_command(
+                self.uav_pose.x,
+                self.uav_pose.y,
+                target_x,
+                target_y,
+                tick_hz=self.tick_hz,
+                speed_mps=speed_mps,
+                step_scale=self.follow_core_step_scale,
+            )
+            return cmd_x, cmd_y, math.hypot(cmd_x - self.uav_pose.x, cmd_y - self.uav_pose.y)
+
+        max_xy_step = self.max_xy_step_m * step_scale
+        if max_xy_step > 0.0 and dist_xy > max_xy_step:
+            scale = max_xy_step / max(dist_xy, 1e-9)
+            dx *= scale
+            dy *= scale
+            return self.uav_pose.x + dx, self.uav_pose.y + dy, max_xy_step
+        return self.uav_pose.x + dx, self.uav_pose.y + dy, dist_xy
 
     @staticmethod
     def _target_from_pose_msg(
@@ -349,7 +396,9 @@ class VisualActuationBridge(Node):
         estimate_quality = self.last_target_estimate.quality if estimate_fresh else 0.0
         estimate_lost = estimate_mode == "LOST"
         step_scale = 1.0
-        if estimate_mode == "DEGRADED":
+        if self.follow_core_alignment_enable:
+            step_scale = 1.0
+        elif estimate_mode == "DEGRADED":
             step_scale = self.degraded_step_scale * max(0.45, min(1.0, estimate_quality if estimate_quality > 0.0 else 0.6))
         elif estimate_mode == "PREDICTED":
             step_scale = self.predicted_step_scale * max(0.60, min(1.0, estimate_quality if estimate_quality > 0.0 else 0.75))
@@ -426,23 +475,15 @@ class VisualActuationBridge(Node):
                     and plan_z is not None
                     and plan_yaw is not None
                 ):
-                    dx = float(plan_x) - self.uav_pose.x
-                    dy = float(plan_y) - self.uav_pose.y
-                    dist_xy = math.hypot(dx, dy)
-                    max_xy_step = self.max_xy_step_m * step_scale
                     max_yaw_step = self.max_yaw_step_rad * step_scale
-                    if max_xy_step > 0.0 and dist_xy > max_xy_step:
-                        scale = max_xy_step / max(dist_xy, 1e-9)
-                        dx *= scale
-                        dy *= scale
-                        step_xy_m = max_xy_step
-                    else:
-                        step_xy_m = dist_xy
+                    target_x, target_y, step_xy_m = self._xy_command_toward(
+                        float(plan_x),
+                        float(plan_y),
+                        step_scale,
+                    )
                     yaw_error = wrap_pi(float(plan_yaw) - self.uav_pose.yaw) * self.yaw_cmd_sign
                     step_yaw_rad = self._clamp_symmetric(yaw_error, max_yaw_step)
 
-                    target_x = self.uav_pose.x + dx
-                    target_y = self.uav_pose.y + dy
                     target_z = self.uav_z if self.use_current_altitude else float(plan_z)
                     target_yaw = wrap_pi(self.uav_pose.yaw + step_yaw_rad)
                     if step_xy_m > 1e-6 or abs(step_yaw_rad) > 1e-6:
@@ -469,23 +510,15 @@ class VisualActuationBridge(Node):
                         and follow_z is not None
                         and follow_yaw is not None
                     ):
-                        dx = float(follow_x) - self.uav_pose.x
-                        dy = float(follow_y) - self.uav_pose.y
-                        dist_xy = math.hypot(dx, dy)
-                        max_xy_step = self.max_xy_step_m * step_scale
                         max_yaw_step = self.max_yaw_step_rad * step_scale
-                        if max_xy_step > 0.0 and dist_xy > max_xy_step:
-                            scale = max_xy_step / max(dist_xy, 1e-9)
-                            dx *= scale
-                            dy *= scale
-                            step_xy_m = max_xy_step
-                        else:
-                            step_xy_m = dist_xy
+                        target_x, target_y, step_xy_m = self._xy_command_toward(
+                            float(follow_x),
+                            float(follow_y),
+                            step_scale,
+                        )
                         yaw_error = wrap_pi(float(follow_yaw) - self.uav_pose.yaw) * self.yaw_cmd_sign
                         step_yaw_rad = self._clamp_symmetric(yaw_error, max_yaw_step)
 
-                        target_x = self.uav_pose.x + dx
-                        target_y = self.uav_pose.y + dy
                         target_z = self.uav_z if self.use_current_altitude else float(follow_z)
                         target_yaw = wrap_pi(self.uav_pose.yaw + step_yaw_rad)
                         if step_xy_m > 1e-6 or abs(step_yaw_rad) > 1e-6:
