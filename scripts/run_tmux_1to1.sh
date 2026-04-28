@@ -29,6 +29,7 @@ UAV_NAME="dji0"
 ROS_DOMAIN_ID_EFFECTIVE="${ROS_DOMAIN_ID:-3}"
 RMW_IMPLEMENTATION_EFFECTIVE="${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}"
 UGV_NAMESPACE="a201_0000"
+FOLLOW_WAIT_TOPICS=""
 SPAWN_ARGS=()
 FOLLOW_ARGS=()
 GAZEBO_ARGS=()
@@ -125,6 +126,9 @@ for arg in "$@"; do
     follow_delay_s:=*)
       FOLLOW_DELAY_OVERRIDE="${arg#follow_delay_s:=}"
       ;;
+    follow_wait_topics:=*)
+      FOLLOW_WAIT_TOPICS="${arg#follow_wait_topics:=}"
+      ;;
     record_delay_s:=*)
       RECORD_DELAY_OVERRIDE="${arg#record_delay_s:=}"
       ;;
@@ -162,7 +166,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [world] [mode:=follow|yolo] [record:=true|false] [record_profile:=default|step2_light|vision] [record_tag:=name] [record_out:=bags/experiments/...] [camera:=attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [use_actual_heading:=true|false] [leader_actual_pose_enable:=true|false] [camera_actual_pose_reacquire_enable:=true|false] [publish_follow_debug_topics:=true|false] [publish_pose_cmd_topics:=true|false] [publish_camera_debug_topics:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [yolo_control_mode:=visual_bridge|follow_uav_estimate] [visual_follow_logic:=legacy|follow_core] [obb:=true|false] [tracker:=true|false] [external_detection_node:=detector|tracker] [tracker_config:=botsort.yaml] [detector_backend:=ultralytics|onnx_cpu|onnx_directml] [detector_async_inference:=true|false] [yolo_device:=cpu|auto] [detector_onnx_model:=...] [ugv_start_delay_s:=12.0] [follow_point_prefer_target_pose_heading:=true|false] [follow_point_prefer_target_pose_position:=true|false] [start_visual_actuation_bridge:=true|false] [start_visual_follow_point_generator:=true|false] [start_visual_follow_planner:=true|false] [start_visual_follow_controller:=true|false] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [rtf:=1.0] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [record_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes] [omnet:=true|false]" >&2
+      echo "Usage: $0 [world] [mode:=follow|yolo] [record:=true|false] [record_profile:=default|step2_light|vision] [record_tag:=name] [record_out:=bags/experiments/...] [camera:=attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [use_actual_heading:=true|false] [leader_actual_pose_enable:=true|false] [camera_actual_pose_reacquire_enable:=true|false] [publish_follow_debug_topics:=true|false] [publish_pose_cmd_topics:=true|false] [publish_camera_debug_topics:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [yolo_control_mode:=visual_bridge|follow_uav_estimate] [visual_follow_logic:=legacy|follow_core] [obb:=true|false] [tracker:=true|false] [external_detection_node:=detector|tracker] [tracker_config:=botsort.yaml] [detector_backend:=ultralytics|onnx_cpu|onnx_directml] [detector_async_inference:=true|false] [yolo_device:=cpu|auto] [detector_onnx_model:=...] [ugv_start_delay_s:=12.0] [follow_point_prefer_target_pose_heading:=true|false] [follow_point_prefer_target_pose_position:=true|false] [start_visual_actuation_bridge:=true|false] [start_visual_follow_point_generator:=true|false] [start_visual_follow_planner:=true|false] [start_visual_follow_controller:=true|false] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [rtf:=1.0] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [follow_wait_topics:=/topic_a,/topic_b] [record_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes] [omnet:=true|false]" >&2
       exit 2
       ;;
   esac
@@ -346,6 +350,43 @@ done
 EOF
 }
 
+build_wait_for_topic_message_fn() {
+  cat <<'EOF'
+wait_for_topic_message() {
+  local topic="$1"
+  local label="$2"
+  local timeout_s="${3:-10}"
+  echo "[$label] waiting for message on $topic"
+  while true; do
+    if timeout "${timeout_s}s" ros2 topic echo --once "$topic" >/dev/null 2>&1; then
+      echo "[$label] received message on $topic"
+      return 0
+    fi
+    echo "[$label] still waiting for $topic"
+    sleep 1
+  done
+}
+EOF
+}
+
+build_follow_ready_cmd() {
+  local topic=""
+  local topics=()
+
+  build_localization_ready_cmd
+  if [ -z "$FOLLOW_WAIT_TOPICS" ]; then
+    return 0
+  fi
+
+  build_wait_for_topic_message_fn
+  IFS=',' read -r -a topics <<< "$FOLLOW_WAIT_TOPICS"
+  for topic in "${topics[@]}"; do
+    topic="$(printf '%s' "$topic" | xargs)"
+    [ -n "$topic" ] || continue
+    printf "wait_for_topic_message %q 'follow_ready'\n" "$topic"
+  done
+}
+
 signal_processes_by_pattern() {
   local pattern="$1"
   local pids=()
@@ -442,6 +483,7 @@ fi
 
 LOCALIZATION_READY_CMD="$(build_localization_ready_cmd)"
 NAV2_READY_CMD="$(build_nav2_ready_cmd)"
+FOLLOW_READY_CMD="$(build_follow_ready_cmd)"
 
 if [ "$RECORD" = true ]; then
   RECORD_CMD=(./run.sh record_experiment "$WORLD" "mode:=$MODE" "uav_name:=$UAV_NAME" "profile:=$RECORD_PROFILE")
@@ -457,7 +499,7 @@ GAZEBO_LINE="$(build_line 0 false "" "${GAZEBO_CMD[@]}")"
 SPAWN_LINE="$(build_line "$SPAWN_DELAY_S" true "" "${SPAWN_CMD[@]}")"
 LOCALIZATION_LINE="$(build_line "$LOCALIZATION_DELAY_S" true "" "${LOCALIZATION_CMD[@]}")"
 NAV2_LINE="$(build_line "$NAV2_DELAY_S" true "" "${NAV2_CMD[@]}")"
-FOLLOW_LINE="$(build_line "$FOLLOW_DELAY_S" true "$LOCALIZATION_READY_CMD" "${FOLLOW_CMD[@]}")"
+FOLLOW_LINE="$(build_line "$FOLLOW_DELAY_S" true "$FOLLOW_READY_CMD" "${FOLLOW_CMD[@]}")"
 if [ "$RECORD" = true ]; then
   RECORD_LINE="$(build_line "$RECORD_DELAY_S" true "$LOCALIZATION_READY_CMD" "${RECORD_CMD[@]}")"
 fi

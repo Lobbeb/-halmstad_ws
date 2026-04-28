@@ -24,6 +24,7 @@ from lrs_halmstad.follow.follow_math import (
     clamp_point_to_radius,
     coerce_bool,
     compute_leader_look_target,
+    rotate_body_offset,
     solve_yaw_to_target,
     wrap_pi,
     yaw_from_quat,
@@ -81,6 +82,8 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
         declare_yaml_param(self, "camera_z_offset_m")
         declare_yaml_param(self, "leader_look_target_x_m")
         declare_yaml_param(self, "leader_look_target_y_m")
+        self.declare_parameter("forward_offset_m", 0.0, dyn_num)
+        self.declare_parameter("lateral_offset_m", 0.0, dyn_num)
         self.declare_parameter("leader_heading_offset_deg", 0.0, dyn_num)
 
         self.world = str(self.get_parameter("world").value)
@@ -137,6 +140,8 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
         self.camera_z_offset_m = float(required_param_value(self, "camera_z_offset_m"))
         self.leader_look_target_x_m = float(required_param_value(self, "leader_look_target_x_m"))
         self.leader_look_target_y_m = float(required_param_value(self, "leader_look_target_y_m"))
+        self.forward_offset_m = float(self.get_parameter("forward_offset_m").value)
+        self.lateral_offset_m = float(self.get_parameter("lateral_offset_m").value)
         self.leader_heading_offset_rad = math.radians(float(self.get_parameter("leader_heading_offset_deg").value))
         if self.tick_hz <= 0.0:
             raise ValueError("tick_hz must be > 0")
@@ -261,6 +266,7 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
             f"publish_debug_topics={self.publish_debug_topics}, publish_pose_cmd_topics={self.publish_pose_cmd_topics}, "
             f"camera_offset_m=({self.camera_x_offset_m}, {self.camera_y_offset_m}, {self.camera_z_offset_m}), "
             f"leader_look_target_xy_m=({self.leader_look_target_x_m}, {self.leader_look_target_y_m}), "
+            f"slot_offset_xy_m=({self.forward_offset_m:.2f}, {self.lateral_offset_m:.2f}), "
             f"leader_heading_offset_deg={math.degrees(self.leader_heading_offset_rad):.1f}, "
             f"require_uav_actual_before_motion={self.require_uav_actual_before_motion}, "
             f"use_uav_actual_z_on_start={self.use_uav_actual_z_on_start}, "
@@ -462,15 +468,42 @@ class FollowUavOdom(EventEmitterMixin, FollowControllerCoreMixin, Node):
         return target_x, target_y
 
     def _distance_targets_for_geometry(self, leader_z: float) -> tuple[float, float]:
+        if self._uses_explicit_slot_geometry():
+            target_z = self._nominal_uav_z_target(leader_z)
+            if self.use_uav_actual_z_on_start and self._latched_uav_actual_z_on_start:
+                target_z = self._bounded_z_target(self.uav_start_z, leader_z)
+            return self._bounded_xy_target(self._explicit_slot_radius_m(), leader_z), target_z
         if self.use_uav_actual_z_on_start and self._latched_uav_actual_z_on_start:
             target_z = self._bounded_z_target(self.uav_start_z, leader_z)
             target_xy = horizontal_distance_for_euclidean(self.d_target, target_z - leader_z)
             return self._bounded_xy_target(target_xy, leader_z), target_z
         return self._nominal_target_pair(leader_z)
 
+    def _uses_explicit_slot_geometry(self) -> bool:
+        return abs(self.forward_offset_m) > 1e-6 or abs(self.lateral_offset_m) > 1e-6
+
+    def _explicit_slot_radius_m(self) -> float:
+        return math.hypot(self.forward_offset_m, self.lateral_offset_m)
+
+    def _scaled_slot_offsets(self, target_horizontal_distance: float) -> tuple[float, float]:
+        desired_radius = self._explicit_slot_radius_m()
+        if desired_radius <= 1e-6:
+            return -target_horizontal_distance, 0.0
+        scale = target_horizontal_distance / desired_radius
+        return self.forward_offset_m * scale, self.lateral_offset_m * scale
+
     def _compute_anchor_target(self, target_horizontal_distance: float) -> Pose2D:
-        xt = self.ugv_pose.x - target_horizontal_distance * math.cos(self.ugv_follow_heading)
-        yt = self.ugv_pose.y - target_horizontal_distance * math.sin(self.ugv_follow_heading)
+        if self._uses_explicit_slot_geometry():
+            forward_offset_m, lateral_offset_m = self._scaled_slot_offsets(target_horizontal_distance)
+        else:
+            forward_offset_m, lateral_offset_m = -target_horizontal_distance, 0.0
+        offset_x, offset_y = rotate_body_offset(
+            forward_offset_m,
+            lateral_offset_m,
+            self.ugv_follow_heading,
+        )
+        xt = self.ugv_pose.x + offset_x
+        yt = self.ugv_pose.y + offset_y
         xt, yt = clamp_point_to_radius(
             self.ugv_pose.x,
             self.ugv_pose.y,

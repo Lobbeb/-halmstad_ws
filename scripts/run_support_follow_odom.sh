@@ -109,7 +109,7 @@ fi
 
 echo "[run_support_follow_odom] Overlaying dji1+dji2 support-follow on top of the trusted 1-to-1 baseline."
 if ! ros2 topic list 2>/dev/null | grep -qx '/dji0/pose'; then
-  echo "[run_support_follow_odom] Warning: /dji0/pose is not visible yet. Start the trusted 1-to-1 baseline first." >&2
+  echo "[run_support_follow_odom] /dji0/pose is not visible yet; support UAVs will still spawn now and their controllers will wait for the main UAV pose." >&2
 fi
 
 setsid ros2 launch lrs_halmstad support_follow_odom.launch.py world:="$WORLD" "$@" &
