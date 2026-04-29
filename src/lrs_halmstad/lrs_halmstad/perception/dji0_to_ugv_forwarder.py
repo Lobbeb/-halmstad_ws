@@ -44,6 +44,10 @@ class Dji0ToUgvForwarder(Node):
         self.out_awareness_status_topic = str(
             self.declare_parameter("out_awareness_status_topic", "/coord/ugv/support_awareness_status").value
         ).strip() or "/coord/ugv/support_awareness_status"
+        self.publish_advisory = _coerce_bool(self.declare_parameter("publish_advisory", True).value)
+        self.out_advisory_topic = str(
+            self.declare_parameter("out_advisory_topic", "/coord/ugv/support_path_advisory").value
+        ).strip() or "/coord/ugv/support_path_advisory"
 
         self.forward_owner = str(self.declare_parameter("forward_owner", "dji0").value).strip() or "dji0"
         self.forward_stage = str(self.declare_parameter("forward_stage", "dji0_to_ugv").value).strip() or "dji0_to_ugv"
@@ -54,6 +58,11 @@ class Dji0ToUgvForwarder(Node):
         self._out_awareness_pub = (
             self.create_publisher(String, self.out_awareness_status_topic, 10)
             if self.awareness_enable
+            else None
+        )
+        self._out_advisory_pub = (
+            self.create_publisher(String, self.out_advisory_topic, 10)
+            if self.publish_advisory
             else None
         )
 
@@ -67,6 +76,7 @@ class Dji0ToUgvForwarder(Node):
             f"out_detection={self.out_detection_topic}, out_status={self.out_status_topic}, "
             f"in_summary={self.in_summary_topic}, out_summary={self.out_summary_topic}, "
             f"awareness_enable={self.awareness_enable}, awareness_status={self.out_awareness_status_topic}, "
+            f"publish_advisory={self.publish_advisory}, advisory={self.out_advisory_topic}, "
             f"forward_owner={self.forward_owner}, forward_stage={self.forward_stage}"
         )
 
@@ -120,9 +130,11 @@ class Dji0ToUgvForwarder(Node):
             payload["forwarded_ros_ns"] = now_ns
             out.data = json.dumps(payload, separators=(",", ":"), sort_keys=True)
             self._publish_awareness_status(payload)
+            self._publish_advisory(payload)
         except Exception:
             out.data = msg.data
             self._publish_awareness_status(None, reason="invalid_summary_json")
+            self._publish_advisory(None, reason="invalid_summary_json")
         self._out_summary_pub.publish(out)
 
     def _publish_awareness_status(self, payload: dict | None, *, reason: str = "") -> None:
@@ -182,6 +194,59 @@ class Dji0ToUgvForwarder(Node):
         msg = String()
         msg.data = line
         self._out_awareness_pub.publish(msg)
+
+    def _publish_advisory(self, payload: dict | None, *, reason: str = "") -> None:
+        if self._out_advisory_pub is None:
+            return
+
+        if not isinstance(payload, dict):
+            line = (
+                "task=ugv_support_path_advisory advisory_state=INVALID_SUMMARY "
+                f"reason={reason or 'invalid_summary'} candidate_available=false selected_source=none "
+                "candidate_class=none confidence=-1.000 freshness_age_ms=-1.0 relation_source=unknown "
+                "relation_quality=unknown suggested_action=monitor_only replanning_enabled=false"
+            )
+        else:
+            selected_source = str(payload.get("selected_source", "none") or "none")
+            sources = payload.get("sources", [])
+            selected = None
+            if isinstance(sources, list):
+                selected = next(
+                    (
+                        source
+                        for source in sources
+                        if isinstance(source, dict)
+                        and str(source.get("source_id", "")) == selected_source
+                    ),
+                    None,
+                )
+            if selected is None and isinstance(sources, list):
+                selected = next((source for source in sources if isinstance(source, dict)), {})
+            if not isinstance(selected, dict):
+                selected = {}
+
+            state = str(payload.get("state", "UNKNOWN") or "UNKNOWN")
+            valid = bool(selected.get("valid", False))
+            conf = float(selected.get("conf", -1.0) or -1.0)
+            candidate_available = valid and state == "OK" and conf >= 0.0
+            advisory_state = "CANDIDATE" if candidate_available else state
+            cls_name = str(selected.get("cls_name", "") or "")
+            cls_id = selected.get("cls_id", None)
+            candidate_class = cls_name or (str(cls_id) if cls_id is not None else "none")
+            age_ms = float(selected.get("age_ms", -1.0) or -1.0)
+            line = (
+                "task=ugv_support_path_advisory "
+                f"advisory_state={advisory_state} candidate_available={str(candidate_available).lower()} "
+                f"selected_source={selected_source} candidate_class={candidate_class} "
+                f"confidence={conf:.3f} freshness_age_ms={age_ms:.1f} "
+                f"relation_source={payload.get('relation_source', 'unknown')} "
+                f"relation_quality={payload.get('relation_quality', 'unknown')} "
+                "suggested_action=monitor_only replanning_enabled=false"
+            )
+
+        msg = String()
+        msg.data = line
+        self._out_advisory_pub.publish(msg)
 
 
 def main(args=None) -> None:

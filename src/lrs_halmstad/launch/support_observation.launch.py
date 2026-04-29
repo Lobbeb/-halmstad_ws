@@ -15,6 +15,9 @@ def _support_detector_instance(
     params_file,
     uav_name,
     camera_name,
+    detector_backend,
+    detector_onnx_model,
+    yolo_weights,
 ):
     node_name = f'support_{instance_id}_leader_detector'
     detector_params = RewrittenYaml(
@@ -23,8 +26,8 @@ def _support_detector_instance(
             'event_topic': f'/coord/support/{instance_id}/leader_detection_events',
             'out_topic': f'/coord/support/{instance_id}/leader_detection',
             'status_topic': f'/coord/support/{instance_id}/leader_detection_status',
-            'backend': LaunchConfiguration('detector_backend'),
-            'onnx_model': LaunchConfiguration('detector_onnx_model'),
+            'backend': detector_backend,
+            'onnx_model': detector_onnx_model,
             'async_inference': LaunchConfiguration('detector_async_inference'),
             'latest_frame_only': LaunchConfiguration('detector_latest_frame_only'),
             'stale_detection_threshold_ms': LaunchConfiguration('detector_stale_detection_threshold_ms'),
@@ -35,7 +38,7 @@ def _support_detector_instance(
             'target_class_name': LaunchConfiguration('target_class_name'),
             'target_class_id': LaunchConfiguration('target_class_id'),
             'device': LaunchConfiguration('yolo_device'),
-            'yolo_weights': LaunchConfiguration('yolo_weights'),
+            'yolo_weights': yolo_weights,
         },
         key_rewrites={'leader_detector': node_name},
         convert_types=True,
@@ -77,6 +80,45 @@ def generate_launch_description():
     detector_backend_arg = DeclareLaunchArgument('detector_backend', default_value='onnx_cpu')
     detector_onnx_model_arg = DeclareLaunchArgument('detector_onnx_model', default_value='')
     yolo_weights_arg = DeclareLaunchArgument('yolo_weights', default_value='')
+    support_detector_backend_arg = DeclareLaunchArgument(
+        'support_detector_backend',
+        default_value=LaunchConfiguration('detector_backend'),
+        description='Shared detector backend for support UAVs unless overridden per UAV.',
+    )
+    support_detector_onnx_model_arg = DeclareLaunchArgument(
+        'support_detector_onnx_model',
+        default_value=LaunchConfiguration('detector_onnx_model'),
+        description='Shared support detector ONNX model unless overridden per UAV.',
+    )
+    support_yolo_weights_arg = DeclareLaunchArgument(
+        'support_yolo_weights',
+        default_value=LaunchConfiguration('yolo_weights'),
+        description='Shared support Ultralytics weights unless overridden per UAV.',
+    )
+    dji1_detector_backend_arg = DeclareLaunchArgument(
+        'dji1_detector_backend',
+        default_value=LaunchConfiguration('support_detector_backend'),
+    )
+    dji1_detector_onnx_model_arg = DeclareLaunchArgument(
+        'dji1_detector_onnx_model',
+        default_value=LaunchConfiguration('support_detector_onnx_model'),
+    )
+    dji1_yolo_weights_arg = DeclareLaunchArgument(
+        'dji1_yolo_weights',
+        default_value=LaunchConfiguration('support_yolo_weights'),
+    )
+    dji2_detector_backend_arg = DeclareLaunchArgument(
+        'dji2_detector_backend',
+        default_value=LaunchConfiguration('support_detector_backend'),
+    )
+    dji2_detector_onnx_model_arg = DeclareLaunchArgument(
+        'dji2_detector_onnx_model',
+        default_value=LaunchConfiguration('support_detector_onnx_model'),
+    )
+    dji2_yolo_weights_arg = DeclareLaunchArgument(
+        'dji2_yolo_weights',
+        default_value=LaunchConfiguration('support_yolo_weights'),
+    )
     yolo_device_arg = DeclareLaunchArgument('yolo_device', default_value='auto')
     detector_async_inference_arg = DeclareLaunchArgument('detector_async_inference', default_value='true')
     detector_latest_frame_only_arg = DeclareLaunchArgument('detector_latest_frame_only', default_value='true')
@@ -153,6 +195,15 @@ def generate_launch_description():
         'ugv_support_awareness_status_topic',
         default_value='/coord/ugv/support_awareness_status',
     )
+    support_awareness_publish_advisory_arg = DeclareLaunchArgument(
+        'support_awareness_publish_advisory',
+        default_value='true',
+        description='Publish status-only UGV advisory text for future replanning/costmap integration.',
+    )
+    ugv_support_path_advisory_topic_arg = DeclareLaunchArgument(
+        'ugv_support_path_advisory_topic',
+        default_value='/coord/ugv/support_path_advisory',
+    )
     support_camera_scan_enable_arg = DeclareLaunchArgument(
         'support_camera_scan_enable',
         default_value='false',
@@ -185,12 +236,18 @@ def generate_launch_description():
         params_file=LaunchConfiguration('params_file'),
         uav_name=LaunchConfiguration('dji1_name'),
         camera_name=LaunchConfiguration('camera_name'),
+        detector_backend=LaunchConfiguration('dji1_detector_backend'),
+        detector_onnx_model=LaunchConfiguration('dji1_detector_onnx_model'),
+        yolo_weights=LaunchConfiguration('dji1_yolo_weights'),
     )
     support_dji2_detector = _support_detector_instance(
         instance_id='dji2',
         params_file=LaunchConfiguration('params_file'),
         uav_name=LaunchConfiguration('dji2_name'),
         camera_name=LaunchConfiguration('camera_name'),
+        detector_backend=LaunchConfiguration('dji2_detector_backend'),
+        detector_onnx_model=LaunchConfiguration('dji2_detector_onnx_model'),
+        yolo_weights=LaunchConfiguration('dji2_yolo_weights'),
     )
 
     support_detection_mux = Node(
@@ -233,6 +290,8 @@ def generate_launch_description():
                 'out_summary_topic': LaunchConfiguration('ugv_forward_out_summary_topic'),
                 'awareness_enable': LaunchConfiguration('start_ugv_support_awareness'),
                 'out_awareness_status_topic': LaunchConfiguration('ugv_support_awareness_status_topic'),
+                'publish_advisory': LaunchConfiguration('support_awareness_publish_advisory'),
+                'out_advisory_topic': LaunchConfiguration('ugv_support_path_advisory_topic'),
                 'forward_owner': LaunchConfiguration('ugv_forward_owner'),
                 'forward_stage': LaunchConfiguration('ugv_forward_stage'),
             }
@@ -266,6 +325,15 @@ def generate_launch_description():
         detector_backend_arg,
         detector_onnx_model_arg,
         yolo_weights_arg,
+        support_detector_backend_arg,
+        support_detector_onnx_model_arg,
+        support_yolo_weights_arg,
+        dji1_detector_backend_arg,
+        dji1_detector_onnx_model_arg,
+        dji1_yolo_weights_arg,
+        dji2_detector_backend_arg,
+        dji2_detector_onnx_model_arg,
+        dji2_yolo_weights_arg,
         yolo_device_arg,
         detector_async_inference_arg,
         detector_latest_frame_only_arg,
@@ -293,6 +361,8 @@ def generate_launch_description():
         ugv_forward_out_summary_topic_arg,
         start_ugv_support_awareness_arg,
         ugv_support_awareness_status_topic_arg,
+        support_awareness_publish_advisory_arg,
+        ugv_support_path_advisory_topic_arg,
         support_camera_scan_enable_arg,
         support_camera_scan_uavs_arg,
         support_camera_scan_yaw_center_deg_arg,
