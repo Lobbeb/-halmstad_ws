@@ -144,6 +144,41 @@ def generate_launch_description():
         'ugv_forward_out_summary_topic',
         default_value='/coord/ugv/support_observation_summary',
     )
+    start_ugv_support_awareness_arg = DeclareLaunchArgument(
+        'start_ugv_support_awareness',
+        default_value='true',
+        description='Publish a compact UGV-side status line from the structured support summary.',
+    )
+    ugv_support_awareness_status_topic_arg = DeclareLaunchArgument(
+        'ugv_support_awareness_status_topic',
+        default_value='/coord/ugv/support_awareness_status',
+    )
+    support_camera_scan_enable_arg = DeclareLaunchArgument(
+        'support_camera_scan_enable',
+        default_value='false',
+        description='Optionally sweep support-UAV camera pan/tilt commands for data collection.',
+    )
+    support_camera_scan_uavs_arg = DeclareLaunchArgument('support_camera_scan_uavs', default_value='dji1,dji2')
+    support_camera_scan_yaw_center_deg_arg = DeclareLaunchArgument(
+        'support_camera_scan_yaw_center_deg',
+        default_value='0.0',
+    )
+    support_camera_scan_yaw_amplitude_deg_arg = DeclareLaunchArgument(
+        'support_camera_scan_yaw_amplitude_deg',
+        default_value='35.0',
+    )
+    support_camera_scan_period_s_arg = DeclareLaunchArgument(
+        'support_camera_scan_period_s',
+        default_value='8.0',
+    )
+    support_camera_scan_pitch_deg_arg = DeclareLaunchArgument(
+        'support_camera_scan_pitch_deg',
+        default_value='-20.0',
+    )
+    support_camera_scan_rate_hz_arg = DeclareLaunchArgument(
+        'support_camera_scan_rate_hz',
+        default_value='10.0',
+    )
 
     support_dji1_detector = _support_detector_instance(
         instance_id='dji1',
@@ -196,8 +231,28 @@ def generate_launch_description():
                 'out_detection_topic': LaunchConfiguration('ugv_forward_out_detection_topic'),
                 'out_status_topic': LaunchConfiguration('ugv_forward_out_status_topic'),
                 'out_summary_topic': LaunchConfiguration('ugv_forward_out_summary_topic'),
+                'awareness_enable': LaunchConfiguration('start_ugv_support_awareness'),
+                'out_awareness_status_topic': LaunchConfiguration('ugv_support_awareness_status_topic'),
                 'forward_owner': LaunchConfiguration('ugv_forward_owner'),
                 'forward_stage': LaunchConfiguration('ugv_forward_stage'),
+            }
+        ],
+    )
+    support_camera_scanner = Node(
+        package='lrs_halmstad',
+        executable='support_camera_scanner',
+        name='support_camera_scanner',
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('support_camera_scan_enable')),
+        parameters=[
+            {
+                'use_sim_time': True,
+                'uav_names': LaunchConfiguration('support_camera_scan_uavs'),
+                'yaw_center_deg': LaunchConfiguration('support_camera_scan_yaw_center_deg'),
+                'yaw_amplitude_deg': LaunchConfiguration('support_camera_scan_yaw_amplitude_deg'),
+                'period_s': LaunchConfiguration('support_camera_scan_period_s'),
+                'pitch_deg': LaunchConfiguration('support_camera_scan_pitch_deg'),
+                'rate_hz': LaunchConfiguration('support_camera_scan_rate_hz'),
             }
         ],
     )
@@ -236,8 +291,18 @@ def generate_launch_description():
         ugv_forward_out_detection_topic_arg,
         ugv_forward_out_status_topic_arg,
         ugv_forward_out_summary_topic_arg,
+        start_ugv_support_awareness_arg,
+        ugv_support_awareness_status_topic_arg,
+        support_camera_scan_enable_arg,
+        support_camera_scan_uavs_arg,
+        support_camera_scan_yaw_center_deg_arg,
+        support_camera_scan_yaw_amplitude_deg_arg,
+        support_camera_scan_period_s_arg,
+        support_camera_scan_pitch_deg_arg,
+        support_camera_scan_rate_hz_arg,
         support_dji1_detector,
         support_dji2_detector,
         support_detection_mux,
         dji0_to_ugv_forwarder,
+        support_camera_scanner,
     ])

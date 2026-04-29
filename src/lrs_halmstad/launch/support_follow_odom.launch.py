@@ -26,6 +26,7 @@ def _support_instance(
     forward_offset_m,
     lateral_offset_m,
     with_camera,
+    bridge_gimbal,
     camera_pitch_offset_deg,
     camera_update_rate,
 ):
@@ -42,7 +43,7 @@ def _support_instance(
                 'uav_mode': uav_mode,
                 'with_camera': with_camera,
                 'bridge_camera': with_camera,
-                'bridge_gimbal': 'false',
+                'bridge_gimbal': bridge_gimbal,
                 'camera_pitch_offset_deg': camera_pitch_offset_deg,
                 'camera_update_rate': camera_update_rate,
                 'x': start_x,
@@ -234,6 +235,11 @@ def generate_launch_description():
         default_value='10',
         description='Support UAV camera sensor update rate in Hz when support_with_camera:=true.',
     )
+    support_bridge_gimbal_arg = DeclareLaunchArgument(
+        'support_bridge_gimbal',
+        default_value='false',
+        description='Bridge support UAV gimbal joint commands when optional camera scanning is enabled.',
+    )
     dji1_name_arg = DeclareLaunchArgument('dji1_name', default_value='dji1')
     dji1_d_target_arg = DeclareLaunchArgument(
         'dji1_d_target',
@@ -365,6 +371,7 @@ def generate_launch_description():
         forward_offset_m=LaunchConfiguration('dji1_forward_offset_m'),
         lateral_offset_m=LaunchConfiguration('dji1_lateral_offset_m'),
         with_camera=LaunchConfiguration('support_with_camera'),
+        bridge_gimbal=LaunchConfiguration('support_bridge_gimbal'),
         camera_pitch_offset_deg=LaunchConfiguration('support_camera_pitch_offset_deg'),
         camera_update_rate=LaunchConfiguration('support_camera_update_rate'),
     )
@@ -384,6 +391,7 @@ def generate_launch_description():
         forward_offset_m=LaunchConfiguration('dji2_forward_offset_m'),
         lateral_offset_m=LaunchConfiguration('dji2_lateral_offset_m'),
         with_camera=LaunchConfiguration('support_with_camera'),
+        bridge_gimbal=LaunchConfiguration('support_bridge_gimbal'),
         camera_pitch_offset_deg=LaunchConfiguration('support_camera_pitch_offset_deg'),
         camera_update_rate=LaunchConfiguration('support_camera_update_rate'),
     )
@@ -402,6 +410,7 @@ def generate_launch_description():
         support_with_camera_arg,
         support_camera_pitch_offset_deg_arg,
         support_camera_update_rate_arg,
+        support_bridge_gimbal_arg,
         dji1_name_arg,
         dji1_d_target_arg,
         dji1_forward_offset_m_arg,
