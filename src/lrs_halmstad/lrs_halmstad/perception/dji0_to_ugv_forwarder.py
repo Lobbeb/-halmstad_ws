@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -26,20 +28,29 @@ class Dji0ToUgvForwarder(Node):
         self.out_status_topic = str(
             self.declare_parameter("out_status_topic", "/coord/ugv/leader_detection_status").value
         ).strip() or "/coord/ugv/leader_detection_status"
+        self.in_summary_topic = str(
+            self.declare_parameter("in_summary_topic", "/coord/dji0/support_observation_summary").value
+        ).strip() or "/coord/dji0/support_observation_summary"
+        self.out_summary_topic = str(
+            self.declare_parameter("out_summary_topic", "/coord/ugv/support_observation_summary").value
+        ).strip() or "/coord/ugv/support_observation_summary"
 
         self.forward_owner = str(self.declare_parameter("forward_owner", "dji0").value).strip() or "dji0"
         self.forward_stage = str(self.declare_parameter("forward_stage", "dji0_to_ugv").value).strip() or "dji0_to_ugv"
 
         self._out_detection_pub = self.create_publisher(String, self.out_detection_topic, 10)
         self._out_status_pub = self.create_publisher(String, self.out_status_topic, 10)
+        self._out_summary_pub = self.create_publisher(String, self.out_summary_topic, 10)
 
         self.create_subscription(String, self.in_detection_topic, self._on_detection, 10)
         self.create_subscription(String, self.in_status_topic, self._on_status, 10)
+        self.create_subscription(String, self.in_summary_topic, self._on_summary, 10)
 
         self.get_logger().info(
             "[dji0_to_ugv_forwarder] Started: "
             f"in_detection={self.in_detection_topic}, in_status={self.in_status_topic}, "
             f"out_detection={self.out_detection_topic}, out_status={self.out_status_topic}, "
+            f"in_summary={self.in_summary_topic}, out_summary={self.out_summary_topic}, "
             f"forward_owner={self.forward_owner}, forward_stage={self.forward_stage}"
         )
 
@@ -79,6 +90,22 @@ class Dji0ToUgvForwarder(Node):
         out = String()
         out.data = out_line
         self._out_status_pub.publish(out)
+
+    def _on_summary(self, msg: String) -> None:
+        now_ns = int(self.get_clock().now().nanoseconds)
+        out = String()
+        try:
+            payload = json.loads(msg.data)
+            if not isinstance(payload, dict):
+                raise ValueError("summary_payload_not_object")
+            payload["forward_stage"] = self.forward_stage
+            payload["forward_owner"] = self.forward_owner
+            payload["forwarded_from_topic"] = self.in_summary_topic
+            payload["forwarded_ros_ns"] = now_ns
+            out.data = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        except Exception:
+            out.data = msg.data
+        self._out_summary_pub.publish(out)
 
 
 def main(args=None) -> None:

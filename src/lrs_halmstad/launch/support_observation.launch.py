@@ -113,6 +113,22 @@ def generate_launch_description():
         'support_mux_out_status_topic',
         default_value='/coord/dji0/leader_detection_status',
     )
+    support_mux_out_summary_topic_arg = DeclareLaunchArgument(
+        'support_mux_out_summary_topic',
+        default_value='/coord/dji0/support_observation_summary',
+    )
+    support_mux_relation_source_arg = DeclareLaunchArgument(
+        'support_mux_relation_source',
+        default_value='odom',
+    )
+    support_mux_relation_quality_arg = DeclareLaunchArgument(
+        'support_mux_relation_quality',
+        default_value='not_evaluated',
+    )
+    support_mux_relation_note_arg = DeclareLaunchArgument(
+        'support_mux_relation_note',
+        default_value='support_slots',
+    )
     ugv_forward_enable_arg = DeclareLaunchArgument('ugv_forward_enable', default_value='true')
     ugv_forward_owner_arg = DeclareLaunchArgument('ugv_forward_owner', default_value='dji0')
     ugv_forward_stage_arg = DeclareLaunchArgument('ugv_forward_stage', default_value='dji0_to_ugv')
@@ -123,6 +139,10 @@ def generate_launch_description():
     ugv_forward_out_status_topic_arg = DeclareLaunchArgument(
         'ugv_forward_out_status_topic',
         default_value='/coord/ugv/leader_detection_status',
+    )
+    ugv_forward_out_summary_topic_arg = DeclareLaunchArgument(
+        'ugv_forward_out_summary_topic',
+        default_value='/coord/ugv/support_observation_summary',
     )
 
     support_dji1_detector = _support_detector_instance(
@@ -153,6 +173,10 @@ def generate_launch_description():
                 'source_stale_timeout_s': LaunchConfiguration('support_mux_source_stale_timeout_s'),
                 'out_detection_topic': LaunchConfiguration('support_mux_out_detection_topic'),
                 'out_status_topic': LaunchConfiguration('support_mux_out_status_topic'),
+                'out_summary_topic': LaunchConfiguration('support_mux_out_summary_topic'),
+                'relation_source': LaunchConfiguration('support_mux_relation_source'),
+                'relation_quality': LaunchConfiguration('support_mux_relation_quality'),
+                'relation_note': LaunchConfiguration('support_mux_relation_note'),
             }
         ],
     )
@@ -168,8 +192,10 @@ def generate_launch_description():
                 'use_sim_time': True,
                 'in_detection_topic': LaunchConfiguration('support_mux_out_detection_topic'),
                 'in_status_topic': LaunchConfiguration('support_mux_out_status_topic'),
+                'in_summary_topic': LaunchConfiguration('support_mux_out_summary_topic'),
                 'out_detection_topic': LaunchConfiguration('ugv_forward_out_detection_topic'),
                 'out_status_topic': LaunchConfiguration('ugv_forward_out_status_topic'),
+                'out_summary_topic': LaunchConfiguration('ugv_forward_out_summary_topic'),
                 'forward_owner': LaunchConfiguration('ugv_forward_owner'),
                 'forward_stage': LaunchConfiguration('ugv_forward_stage'),
             }
@@ -200,11 +226,16 @@ def generate_launch_description():
         support_mux_source_stale_timeout_s_arg,
         support_mux_out_detection_topic_arg,
         support_mux_out_status_topic_arg,
+        support_mux_out_summary_topic_arg,
+        support_mux_relation_source_arg,
+        support_mux_relation_quality_arg,
+        support_mux_relation_note_arg,
         ugv_forward_enable_arg,
         ugv_forward_owner_arg,
         ugv_forward_stage_arg,
         ugv_forward_out_detection_topic_arg,
         ugv_forward_out_status_topic_arg,
+        ugv_forward_out_summary_topic_arg,
         support_dji1_detector,
         support_dji2_detector,
         support_detection_mux,
