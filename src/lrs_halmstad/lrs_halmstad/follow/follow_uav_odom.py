@@ -18,6 +18,7 @@ from lrs_halmstad.follow.follow_math import (
     clamp_point_to_radius,
     coerce_bool,
     horizontal_distance_for_euclidean,
+    rotate_body_offset,
     solve_yaw_to_target,
     wrap_pi,
     yaw_from_quat,
@@ -151,6 +152,7 @@ class FollowUavOdom(FollowControllerCoreMixin, Node):
             f"leader_odom={self.leader_odom_topic}, tick={self.tick_hz}Hz, "
             f"d_target={self.d_target:.2f}, xy_anchor_max={self.xy_anchor_max:.2f}, "
             f"follow_yaw={self.follow_yaw}, publish_pose_cmd_topics={self.publish_pose_cmd_topics}, "
+            f"slot_offset_xy_m=({self.forward_offset_m:.2f}, {self.lateral_offset_m:.2f}), "
             f"leader_heading_offset_deg={math.degrees(self.leader_heading_offset_rad):.1f}, "
             f"uav_start=({self.uav_start_x:.2f},{self.uav_start_y:.2f},"
             f"{self.uav_start_z:.2f},{math.degrees(self.uav_start_yaw):.1f}deg)"

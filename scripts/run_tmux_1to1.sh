@@ -60,6 +60,7 @@ GAZEBO_SPAWN_Y_OVERRIDE=""
 GAZEBO_SPAWN_Z_OVERRIDE=""
 GAZEBO_SPAWN_YAW_OVERRIDE=""
 HAVE_UGV_GOAL_SEQUENCE="false"
+FOLLOW_WAIT_TOPICS=""
 SPAWN_ARGS=()
 FOLLOW_ARGS=()
 GAZEBO_ARGS=()
@@ -264,6 +265,9 @@ for arg in "$@"; do
     follow_delay_s:=*)
       FOLLOW_DELAY_OVERRIDE="${arg#follow_delay_s:=}"
       ;;
+    follow_wait_topics:=*)
+      FOLLOW_WAIT_TOPICS="${arg#follow_wait_topics:=}"
+      ;;
     record_delay_s:=*)
       RECORD_DELAY_OVERRIDE="${arg#record_delay_s:=}"
       ;;
@@ -295,7 +299,7 @@ for arg in "$@"; do
     follow_yaw:=*|pan_enable:=*|use_tilt:=*|tilt_enable:=*|camera_default_tilt_deg:=*|use_actual_heading:=*|leader_actual_heading_enable:=*|leader_actual_heading_topic:=*|leader_actual_pose_enable:=*|camera_actual_pose_reacquire_enable:=*|publish_follow_debug_topics:=*|publish_pose_cmd_topics:=*|publish_camera_debug_topics:=*|ugv_goal_sequence_randomize:=*|ugv_goal_sequence_random_reverse:=*|ugv_goal_sequence_relative_to_current_pose:=*)
       FOLLOW_ARGS+=("$arg")
       ;;
-    weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*|tracker:=*|external_detection_node:=*|tracker_config:=*|yolo_device:=*|device:=*|detector_backend:=*|detector_async_inference:=*|detector_onnx_model:=*|range_mode:=*|leader_range_mode:=*|ugv_start_delay_s:=*|start_visual_follow_controller:=*|start_visual_follow_point_generator:=*|start_visual_follow_planner:=*|start_visual_actuation_bridge:=*|leader_selected_target_topic:=*|leader_selected_target_filtered_topic:=*|leader_selected_target_filtered_status_topic:=*|leader_visual_target_estimate_topic:=*|leader_visual_target_estimate_status_topic:=*|leader_follow_point_topic:=*|leader_follow_point_status_topic:=*|leader_planned_target_topic:=*|leader_planned_target_status_topic:=*|leader_visual_control_topic:=*|leader_visual_control_status_topic:=*|leader_visual_actuation_bridge_status_topic:=*)
+    weights:=*|target:=*|use_estimate:=*|yolo_control_mode:=*|visual_follow_logic:=*|obb:=*|folder:=*|dir:=*|subdir:=*|tracker:=*|external_detection_node:=*|tracker_config:=*|yolo_device:=*|device:=*|detector_backend:=*|detector_async_inference:=*|detector_onnx_model:=*|range_mode:=*|leader_range_mode:=*|ugv_start_delay_s:=*|start_visual_follow_controller:=*|start_visual_follow_point_generator:=*|start_visual_follow_planner:=*|start_visual_actuation_bridge:=*|follow_point_prefer_target_pose_heading:=*|follow_point_prefer_target_pose_position:=*|leader_selected_target_topic:=*|leader_selected_target_filtered_topic:=*|leader_selected_target_filtered_status_topic:=*|leader_visual_target_estimate_topic:=*|leader_visual_target_estimate_status_topic:=*|leader_follow_point_topic:=*|leader_follow_point_status_topic:=*|leader_planned_target_topic:=*|leader_planned_target_status_topic:=*|leader_visual_control_topic:=*|leader_visual_control_status_topic:=*|leader_visual_actuation_bridge_status_topic:=*)
       FOLLOW_ARGS+=("$arg")
       ;;
     omnet:=*)
@@ -340,7 +344,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [world] [mode:=follow|yolo] [record:=true|false] [record_profile:=default|step2_light|vision] [record_tag:=name] [record_out:=bags/experiments/...] [camera:=attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [use_actual_heading:=true|false] [leader_actual_pose_enable:=true|false] [camera_actual_pose_reacquire_enable:=true|false] [publish_follow_debug_topics:=true|false] [publish_pose_cmd_topics:=true|false] [publish_camera_debug_topics:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [obb:=true|false] [tracker:=true|false] [external_detection_node:=detector|tracker] [tracker_config:=botsort.yaml] [detector_backend:=ultralytics|onnx_cpu|onnx_directml] [detector_async_inference:=true|false] [yolo_device:=cpu|auto] [detector_onnx_model:=...] [ugv_start_delay_s:=12.0] [start_visual_actuation_bridge:=true|false] [start_visual_follow_point_generator:=true|false] [start_visual_follow_planner:=true|false] [start_visual_follow_controller:=true|false] [nav2_goals:=parkinglot_east|route.yaml] [ugv_goal_sequence_csv:=x,y,yaw;...] [ugv_goal_sequence_randomize:=true|false] [ugv_goal_sequence_random_reverse:=true|false] [ugv_goal_sequence_relative_to_current_pose:=true|false] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [rtf:=1.0] [x:=...] [y:=...] [z:=...] [yaw:=...] [state:=checkpoint] [waypoint:=name] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [record_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes] [omnet:=true|false] [omnet_network:=wifi|5g|lora] [omnet_ui:=cmdenv|qtenv] [omnet_project:=/path/UAV_UGV] [omnet_result_dir:=/path] [omnet_bridge_port:=5555] [omnet_start_delay_s:=3.0] [ugv_start_delay_s:=3.0] [uav_start_delay_s:=12.0]" >&2
+      echo "Usage: $0 [world] [mode:=follow|yolo] [record:=true|false] [record_profile:=default|step2_light|vision] [record_tag:=name] [record_out:=bags/experiments/...] [camera:=attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [use_actual_heading:=true|false] [leader_actual_pose_enable:=true|false] [camera_actual_pose_reacquire_enable:=true|false] [publish_follow_debug_topics:=true|false] [publish_pose_cmd_topics:=true|false] [publish_camera_debug_topics:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [yolo_control_mode:=visual_bridge|follow_uav_estimate] [visual_follow_logic:=legacy|follow_core] [obb:=true|false] [tracker:=true|false] [external_detection_node:=detector|tracker] [tracker_config:=botsort.yaml] [detector_backend:=ultralytics|onnx_cpu|onnx_directml] [detector_async_inference:=true|false] [yolo_device:=cpu|auto] [detector_onnx_model:=...] [ugv_start_delay_s:=12.0] [follow_point_prefer_target_pose_heading:=true|false] [follow_point_prefer_target_pose_position:=true|false] [start_visual_actuation_bridge:=true|false] [start_visual_follow_point_generator:=true|false] [start_visual_follow_planner:=true|false] [start_visual_follow_controller:=true|false] [nav2_goals:=parkinglot_east|route.yaml] [ugv_goal_sequence_csv:=x,y,yaw;...] [ugv_goal_sequence_randomize:=true|false] [ugv_goal_sequence_random_reverse:=true|false] [ugv_goal_sequence_relative_to_current_pose:=true|false] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [rtf:=1.0] [x:=...] [y:=...] [z:=...] [yaw:=...] [state:=checkpoint] [waypoint:=name] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [follow_wait_topics:=/topic_a,/topic_b] [record_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes] [omnet:=true|false] [omnet_network:=wifi|5g|lora] [omnet_ui:=cmdenv|qtenv] [omnet_project:=/path/UAV_UGV] [omnet_result_dir:=/path] [omnet_bridge_port:=5555] [omnet_start_delay_s:=3.0] [ugv_start_delay_s:=3.0] [uav_start_delay_s:=12.0]" >&2
       exit 2
       ;;
   esac
@@ -359,7 +363,7 @@ esac
 if [ "$MODE" != "yolo" ]; then
   for arg in "${FOLLOW_ARGS[@]}"; do
       case "$arg" in
-      weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*|tracker:=*|external_detection_node:=*|tracker_config:=*|yolo_device:=*|device:=*|detector_backend:=*|detector_async_inference:=*|detector_onnx_model:=*|range_mode:=*|leader_range_mode:=*|ugv_start_delay_s:=*|start_visual_follow_controller:=*|start_visual_follow_point_generator:=*|start_visual_follow_planner:=*|start_visual_actuation_bridge:=*|leader_selected_target_topic:=*|leader_selected_target_filtered_topic:=*|leader_selected_target_filtered_status_topic:=*|leader_visual_target_estimate_topic:=*|leader_visual_target_estimate_status_topic:=*|leader_follow_point_topic:=*|leader_follow_point_status_topic:=*|leader_planned_target_topic:=*|leader_planned_target_status_topic:=*|leader_visual_control_topic:=*|leader_visual_control_status_topic:=*|leader_visual_actuation_bridge_status_topic:=*)
+      weights:=*|target:=*|use_estimate:=*|yolo_control_mode:=*|visual_follow_logic:=*|obb:=*|folder:=*|dir:=*|subdir:=*|tracker:=*|external_detection_node:=*|tracker_config:=*|yolo_device:=*|device:=*|detector_backend:=*|detector_async_inference:=*|detector_onnx_model:=*|range_mode:=*|leader_range_mode:=*|ugv_start_delay_s:=*|start_visual_follow_controller:=*|start_visual_follow_point_generator:=*|start_visual_follow_planner:=*|start_visual_actuation_bridge:=*|follow_point_prefer_target_pose_heading:=*|follow_point_prefer_target_pose_position:=*|leader_selected_target_topic:=*|leader_selected_target_filtered_topic:=*|leader_selected_target_filtered_status_topic:=*|leader_visual_target_estimate_topic:=*|leader_visual_target_estimate_status_topic:=*|leader_follow_point_topic:=*|leader_follow_point_status_topic:=*|leader_planned_target_topic:=*|leader_planned_target_status_topic:=*|leader_visual_control_topic:=*|leader_visual_control_status_topic:=*|leader_visual_actuation_bridge_status_topic:=*)
         echo "Argument '$arg' requires mode:=yolo" >&2
         exit 2
         ;;
@@ -541,6 +545,51 @@ while ! { exec 3<>/dev/tcp/127.0.0.1/$OMNET_BRIDGE_PORT; } 2>/dev/null; do sleep
 exec 3>&-
 exec 3<&-
 EOF
+}
+
+build_omnet_ready_cmd() {
+  cat <<EOF
+while ! { exec 3<>/dev/tcp/127.0.0.1/$OMNET_BRIDGE_PORT; } 2>/dev/null; do sleep 1; done
+exec 3>&-
+exec 3<&-
+EOF
+}
+
+build_wait_for_topic_message_fn() {
+  cat <<'EOF'
+wait_for_topic_message() {
+  local topic="$1"
+  local label="$2"
+  local timeout_s="${3:-10}"
+  echo "[$label] waiting for message on $topic"
+  while true; do
+    if timeout "${timeout_s}s" ros2 topic echo --once "$topic" >/dev/null 2>&1; then
+      echo "[$label] received message on $topic"
+      return 0
+    fi
+    echo "[$label] still waiting for $topic"
+    sleep 1
+  done
+}
+EOF
+}
+
+build_follow_ready_cmd() {
+  local topic=""
+  local topics=()
+
+  build_localization_ready_cmd
+  if [ -z "$FOLLOW_WAIT_TOPICS" ]; then
+    return 0
+  fi
+
+  build_wait_for_topic_message_fn
+  IFS=',' read -r -a topics <<< "$FOLLOW_WAIT_TOPICS"
+  for topic in "${topics[@]}"; do
+    topic="$(printf '%s' "$topic" | xargs)"
+    [ -n "$topic" ] || continue
+    printf "wait_for_topic_message %q 'follow_ready'\n" "$topic"
+  done
 }
 
 signal_processes_by_pattern() {
@@ -747,6 +796,7 @@ fi
 
 LOCALIZATION_READY_CMD="$(build_localization_ready_cmd)"
 NAV2_READY_CMD="$(build_nav2_ready_cmd)"
+FOLLOW_READY_CMD="$(build_follow_ready_cmd)"
 
 if [ "$RECORD" = true ]; then
   RECORD_CMD=(./run.sh record_experiment "$WORLD" "mode:=$MODE" "uav_name:=$UAV_NAME" "profile:=$RECORD_PROFILE")
@@ -773,7 +823,7 @@ GAZEBO_LINE="$(build_line 0 false "" "${GAZEBO_CMD[@]}")"
 SPAWN_LINE="$(build_line "$SPAWN_DELAY_S" true "" "${SPAWN_CMD[@]}")"
 LOCALIZATION_LINE="$(build_line "$LOCALIZATION_DELAY_S" true "" "${LOCALIZATION_CMD[@]}")"
 NAV2_LINE="$(build_line "$NAV2_DELAY_S" true "" "${NAV2_CMD[@]}")"
-FOLLOW_LINE="$(build_line "$FOLLOW_DELAY_S" true "$LOCALIZATION_READY_CMD" "${FOLLOW_CMD[@]}")"
+FOLLOW_LINE="$(build_line "$FOLLOW_DELAY_S" true "$FOLLOW_READY_CMD" "${FOLLOW_CMD[@]}")"
 if [ "$OMNET" = true ]; then
   OMNET_LINE="$(build_line "$FOLLOW_DELAY_S" true "$OMNET_READY_CMD" "${OMNET_CMD[@]}")"
 fi

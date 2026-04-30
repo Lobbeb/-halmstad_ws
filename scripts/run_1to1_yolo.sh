@@ -18,6 +18,7 @@ USE_TRACKER="true"
 EXTERNAL_DETECTION_NODE="detector"
 LEADER_RANGE_MODE="auto"
 START_OMNET_BRIDGE=""
+YOLO_CONTROL_MODE="visual_bridge"
 WEIGHTS_REL=""
 MODEL_SUBDIR=""
 HAVE_UAV_START_X="false"
@@ -129,6 +130,9 @@ for arg in "$@"; do
       ;;
     use_estimate:=*)
       USE_ESTIMATE="${arg#use_estimate:=}"
+      ;;
+    yolo_control_mode:=*)
+      YOLO_CONTROL_MODE="${arg#yolo_control_mode:=}"
       ;;
     use_actual_heading:=*)
       USE_ACTUAL_HEADING="${arg#use_actual_heading:=}"
@@ -314,6 +318,16 @@ case "$USE_ESTIMATE" in
     ;;
 esac
 
+case "$YOLO_CONTROL_MODE" in
+  visual_bridge|follow_uav_estimate)
+    ;;
+  *)
+    echo "Invalid yolo_control_mode option: $YOLO_CONTROL_MODE" >&2
+    echo "Use yolo_control_mode:=visual_bridge or yolo_control_mode:=follow_uav_estimate" >&2
+    exit 2
+    ;;
+esac
+
 case "$USE_OBB" in
   true|false)
     ;;
@@ -365,10 +379,30 @@ else
   ARG_WEIGHTS_ROOT="detection"
 fi
 
+if [ "$YOLO_CONTROL_MODE" = "follow_uav_estimate" ]; then
+  USE_ESTIMATE="true"
+fi
+
 if [ "$USE_ESTIMATE" = true ]; then
   LEADER_MODE="estimate"
 else
   LEADER_MODE="odom"
+fi
+
+CONTROL_ARGS=()
+if [ "$YOLO_CONTROL_MODE" = "visual_bridge" ]; then
+  CONTROL_ARGS+=(
+    "start_visual_actuation_bridge:=true"
+    "start_visual_follow_point_generator:=true"
+    "start_visual_follow_planner:=true"
+  )
+else
+  CONTROL_ARGS+=(
+    "start_visual_actuation_bridge:=false"
+    "start_visual_follow_point_generator:=false"
+    "start_visual_follow_planner:=false"
+    "start_visual_follow_controller:=false"
+  )
 fi
 
 if [ -z "$WEIGHTS_REL" ]; then
@@ -658,4 +692,5 @@ ros2 launch lrs_halmstad run_follow.launch.py \
   leader_range_mode:="$LEADER_RANGE_MODE" \
   yolo_weights:="$WEIGHTS_REL" \
   "${EXTRA_ARGS[@]}" \
+  "${CONTROL_ARGS[@]}" \
   world:="$WORLD"

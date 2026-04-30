@@ -94,8 +94,10 @@ class LeaderEstimator(EventEmitterMixin, Node):
         )
 
         self.d_target = float(yaml_param(self, "d_target", descriptor=dyn_num))
+        self.declare_parameter("leader_range_mode", "")
+        leader_range_mode = str(self.get_parameter("leader_range_mode").value).strip().lower()
         self.declare_parameter("constant_range_m", 5.0, dyn_num)
-        self.range_mode = str(yaml_param(self, "range_mode")).strip().lower()
+        self.range_mode = leader_range_mode or str(yaml_param(self, "range_mode")).strip().lower()
         self.depth_scale = float(yaml_param(self, "depth_scale", descriptor=dyn_num))
         self.depth_timeout_s = float(yaml_param(self, "depth_timeout_s", descriptor=dyn_num))
         self.depth_patch_min_valid_px = max(1, int(yaml_param(self, "depth_patch_min_valid_px", descriptor=dyn_num)))
@@ -177,6 +179,9 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.last_range_source: str = "none"
         self.last_range_used_m: float = -1.0
         self.last_bearing_used_deg: float = 0.0
+        self.last_projection_mode: str = "none"
+        self.last_depth_raw_m: float = -1.0
+        self.last_projection_tilt_deg: float = float("nan")
         self.last_heading_source: str = "none"
         self.last_reject_reason: str = "none"
         self.last_fault_state: str = "none"
@@ -485,6 +490,82 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.last_camera_world_yaw_rad = wrap_pi(float(msg.data))
         self.last_camera_world_yaw_stamp = self.get_clock().now()
 
+    def _camera_world_yaw_for_projection(self, now: Optional[Time] = None) -> float:
+        if self.uav_pose is None:
+            return self.cam_yaw_offset_rad
+        if (
+            self.last_camera_world_yaw_rad is not None
+            and self.last_camera_world_yaw_stamp is not None
+        ):
+            now = now if now is not None else self.get_clock().now()
+            age_s = max(0.0, (now - self.last_camera_world_yaw_stamp).nanoseconds * 1e-9)
+            if age_s <= self.uav_pose_timeout_s:
+                return float(self.last_camera_world_yaw_rad)
+        return wrap_pi(self.uav_pose.yaw + self.cam_yaw_offset_rad)
+
+    def _camera_tilt_deg_for_projection(self, now: Optional[Time] = None) -> Optional[float]:
+        if (
+            self.last_camera_tilt_deg is not None
+            and self.last_camera_tilt_stamp is not None
+        ):
+            now = now if now is not None else self.get_clock().now()
+            age_s = max(0.0, (now - self.last_camera_tilt_stamp).nanoseconds * 1e-9)
+            if age_s <= self.uav_pose_timeout_s:
+                return float(self.last_camera_tilt_deg)
+        if abs(self.cam_pitch_offset_rad) > 1e-6:
+            # Estimator config uses negative pitch for nose-down.
+            return math.degrees(self.cam_pitch_offset_rad)
+        return None
+
+    def _camera_ray_components(
+        self,
+        x_n: float,
+        y_n: float,
+        world_yaw: float,
+        tilt_deg: float,
+    ) -> Tuple[float, float, float]:
+        down_rad = math.radians(-tilt_deg)
+        ca = math.cos(down_rad)
+        sa = math.sin(down_rad)
+        cy = math.cos(world_yaw)
+        sy = math.sin(world_yaw)
+
+        forward_x = ca * cy
+        forward_y = ca * sy
+        forward_z = -sa
+        right_x = sy
+        right_y = -cy
+        down_x = -sa * cy
+        down_y = -sa * sy
+        down_z = -ca
+        return (
+            forward_x + x_n * right_x + y_n * down_x,
+            forward_y + x_n * right_y + y_n * down_y,
+            forward_z + y_n * down_z,
+        )
+
+    def _depth_projection_xy(
+        self,
+        x_n: float,
+        y_n: float,
+        depth_m: float,
+        world_yaw: float,
+        now: Time,
+    ) -> Optional[Tuple[float, float, float, float]]:
+        tilt_deg = self._camera_tilt_deg_for_projection(now)
+        if tilt_deg is None:
+            return None
+        ray_x, ray_y, _ = self._camera_ray_components(x_n, y_n, world_yaw, tilt_deg)
+        cam_world_x, cam_world_y = self._cam_world_xy()
+        dx = depth_m * ray_x
+        dy = depth_m * ray_y
+        return (
+            cam_world_x + dx,
+            cam_world_y + dy,
+            math.hypot(dx, dy),
+            tilt_deg,
+        )
+
     def on_external_detection_status(self, msg: String) -> None:
         self.last_external_det_status_text = str(msg.data)
         self.last_external_det_status_stamp = self.get_clock().now()
@@ -628,25 +709,30 @@ class LeaderEstimator(EventEmitterMixin, Node):
         yaw_b = self._unwrap_angle_near(yaw_b, self.prev_heading_yaw)
         return yaw_a if abs(yaw_a - self.prev_heading_yaw) <= abs(yaw_b - self.prev_heading_yaw) else yaw_b
 
+    def _actual_leader_yaw_for_heading(self, now: Time) -> Optional[float]:
+        if self.last_actual_leader_pose is None or not self.actual_leader_pose_fresh(now):
+            return None
+        return self.last_actual_leader_pose.yaw
+
     def _ground_point_from_pixel(self, u: float, v: float, cam: CameraModel) -> Optional[Tuple[float, float]]:
         assert self.uav_pose is not None
         x_n = (u - cam.cx) / cam.fx
         y_n = (v - cam.cy) / cam.fy
-        bearing = self.cam_yaw_offset_rad - math.atan2(x_n, 1.0)
-        pitch_img = math.atan2(-y_n, math.sqrt(1.0 + x_n * x_n))
-        cam_world_z = self.uav_pose.z + self.cam_z_offset_m
-        dz = self.target_ground_z_m - cam_world_z
-        elev = self.cam_pitch_offset_rad + pitch_img
-        tan_elev = math.tan(elev)
-        if abs(tan_elev) < 1e-3:
+        world_yaw = self._camera_world_yaw_for_projection()
+        tilt_deg = self._camera_tilt_deg_for_projection()
+        if tilt_deg is None:
             return None
-        horiz_range = dz / tan_elev
-        if not math.isfinite(horiz_range) or horiz_range <= 0.0:
+        ray_x, ray_y, ray_z = self._camera_ray_components(x_n, y_n, world_yaw, tilt_deg)
+        if ray_z >= -1e-6:
+            return None
+        cam_world_z = self.uav_pose.z - self.cam_z_offset_m
+        scale = (self.target_ground_z_m - cam_world_z) / ray_z
+        if not math.isfinite(scale) or scale <= 0.0:
             return None
         cam_world_x, cam_world_y = self._cam_world_xy()
         return (
-            cam_world_x + horiz_range * math.cos(self.uav_pose.yaw + bearing),
-            cam_world_y + horiz_range * math.sin(self.uav_pose.yaw + bearing),
+            cam_world_x + scale * ray_x,
+            cam_world_y + scale * ray_y,
         )
 
     def _obb_heading_from_corners(
@@ -742,22 +828,42 @@ class LeaderEstimator(EventEmitterMixin, Node):
     def _estimate_from_detection(self, det: Detection2D, cam: CameraModel, now: Time) -> Tuple[Pose3D, str]:
         assert self.uav_pose is not None
         center_x_n = (det.u - cam.cx) / cam.fx
-        center_bearing = self.cam_yaw_offset_rad - math.atan2(center_x_n, 1.0)
+        image_bearing = -math.atan2(center_x_n, 1.0)
+        camera_world_yaw = self._camera_world_yaw_for_projection(now)
+        world_bearing = wrap_pi(camera_world_yaw + image_bearing)
+        center_bearing = wrap_pi(world_bearing - self.uav_pose.yaw)
         depth_range = self._depth_range_at(det, now)
         cam_world_x, cam_world_y = self._cam_world_xy()
         depth_reject_reason = "none"
+        depth_xy: Optional[Tuple[float, float, float, float]] = None
+        self.last_depth_raw_m = float(depth_range) if depth_range is not None else -1.0
+        self.last_projection_mode = "none"
+        self.last_projection_tilt_deg = float("nan")
         if depth_range is not None:
-            depth_x = cam_world_x + depth_range * math.cos(self.uav_pose.yaw + center_bearing)
-            depth_y = cam_world_y + depth_range * math.sin(self.uav_pose.yaw + center_bearing)
+            depth_xy = self._depth_projection_xy(center_x_n, (det.v - cam.cy) / cam.fy, depth_range, camera_world_yaw, now)
+            if depth_xy is None:
+                depth_x = cam_world_x + depth_range * math.cos(world_bearing)
+                depth_y = cam_world_y + depth_range * math.sin(world_bearing)
+                projected_depth_range = depth_range
+                projection_mode = "depth_horizontal_fallback"
+                projection_tilt_deg = float("nan")
+            else:
+                depth_x, depth_y, projected_depth_range, projection_tilt_deg = depth_xy
+                projection_mode = "depth_camera_ray"
             depth_reject_reason = self._depth_reject_reason(
                 depth_x,
                 depth_y,
-                depth_range,
+                projected_depth_range,
                 now,
                 det.track_id,
             )
             if depth_reject_reason != "none":
                 depth_range = None
+                depth_xy = None
+            else:
+                depth_range = projected_depth_range
+                self.last_projection_mode = projection_mode
+                self.last_projection_tilt_deg = projection_tilt_deg
         radio_range = self._radio_range_as_horizontal(now)
         if self.range_mode == "depth":
             if depth_range is None:
@@ -782,12 +888,24 @@ class LeaderEstimator(EventEmitterMixin, Node):
                 range_m, range_source = self._constant_target_range()
 
         bearing = center_bearing
-        x = cam_world_x + range_m * math.cos(self.uav_pose.yaw + bearing)
-        y = cam_world_y + range_m * math.sin(self.uav_pose.yaw + bearing)
+        if range_source == "depth" and depth_xy is not None:
+            x = depth_xy[0]
+            y = depth_xy[1]
+        else:
+            x = cam_world_x + range_m * math.cos(world_bearing)
+            y = cam_world_y + range_m * math.sin(world_bearing)
+            if range_source != "depth":
+                self.last_projection_mode = range_source
 
         heading_source = "fallback"
         yaw = self.prev_heading_yaw if self.prev_heading_yaw is not None else self.uav_pose.yaw
-        if det.obb_heading_yaw is not None:
+        actual_heading_yaw = self._actual_leader_yaw_for_heading(now)
+        if actual_heading_yaw is not None:
+            # In sim truth-assisted runs, prefer the real body-yaw frame for the
+            # follow anchor. OBB yaw is bidirectional and can flip the anchor side.
+            yaw = actual_heading_yaw
+            heading_source = "actual_pose"
+        elif det.obb_heading_yaw is not None:
             yaw = self._resolve_bidirectional_heading(det.obb_heading_yaw)
             heading_source = "obb"
         elif det.obb_corners is not None:
@@ -886,7 +1004,9 @@ class LeaderEstimator(EventEmitterMixin, Node):
             f"detector_publish_latency_ms={self._detector_publish_latency_ms():.1f} "
             f"conf={self.last_det_conf:.3f} latency_ms={self.last_latency_ms:.1f} "
             f"range_src={self.last_range_source} range_mode={self.range_mode} range_m={self.last_range_used_m:.2f} "
-            f"bearing_deg={self.last_bearing_used_deg:.1f} reject_reason={self.last_reject_reason} "
+            f"bearing_deg={self.last_bearing_used_deg:.1f} projection={self.last_projection_mode} "
+            f"depth_raw_m={self.last_depth_raw_m:.2f} tilt_deg={self.last_projection_tilt_deg:.1f} "
+            f"reject_reason={self.last_reject_reason} "
             f"heading_src={self.last_heading_source} "
             f"audit_ticks={self.audit_ticks_total} audit_ok={self.audit_ok_total} "
             f"audit_no_det={self.audit_no_det_total} audit_stale={self.audit_stale_total} "
@@ -908,7 +1028,8 @@ class LeaderEstimator(EventEmitterMixin, Node):
         err_d_text = "na" if est_d is None or real_d is None else f"{(est_d - real_d):.2f}"
         err_xy_text = "na" if est_xy is None or real_xy is None else f"{(est_xy - real_xy):.2f}"
         return (
-            f"range_src={self.last_range_source} range_m={range_m_text} "
+            f"range_src={self.last_range_source} range_m={range_m_text} projection={self.last_projection_mode} "
+            f"depth_raw_m={self.last_depth_raw_m:.2f} tilt_deg={self.last_projection_tilt_deg:.1f} "
             f"est_d_m={est_d_text} est_xy_m={est_xy_text} "
             f"real_d_m={real_d_text} real_xy_m={real_xy_text} real_z_m={real_z_text} "
             f"err_d_m={err_d_text} err_xy_m={err_xy_text}"
@@ -1099,6 +1220,9 @@ class LeaderEstimator(EventEmitterMixin, Node):
                 estimate_lines.extend(self._actual_range_lines(now))
                 estimate_lines.extend([
                     f"range_src: {self.last_range_source}",
+                    f"proj: {self.last_projection_mode}",
+                    f"depth_raw: {self.last_depth_raw_m:.2f}m",
+                    f"tilt: {self.last_projection_tilt_deg:.1f}deg",
                     f"bearing: {self.last_bearing_used_deg:.1f}deg",
                     f"est_heading: {resolved_heading_label}",
                     f"heading_src: {resolved_heading_src}",

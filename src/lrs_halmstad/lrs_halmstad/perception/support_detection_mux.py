@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Optional
@@ -62,12 +63,20 @@ class SupportDetectionMux(Node):
         self.out_status_topic = str(
             self.declare_parameter("out_status_topic", "/coord/dji0/leader_detection_status").value
         ).strip() or "/coord/dji0/leader_detection_status"
+        self.out_summary_topic = str(
+            self.declare_parameter("out_summary_topic", "/coord/dji0/support_observation_summary").value
+        ).strip() or "/coord/dji0/support_observation_summary"
 
         self.publish_rate_hz = float(self.declare_parameter("publish_rate_hz", 10.0).value)
         self.source_stale_timeout_s = max(0.05, float(self.declare_parameter("source_stale_timeout_s", 0.75).value))
         self.prefer_current_source_on_tie = bool(
             self.declare_parameter("prefer_current_source_on_tie", True).value
         )
+        self.relation_source = str(self.declare_parameter("relation_source", "odom").value).strip() or "odom"
+        self.relation_quality = str(
+            self.declare_parameter("relation_quality", "not_evaluated").value
+        ).strip() or "not_evaluated"
+        self.relation_note = str(self.declare_parameter("relation_note", "support_slots").value).strip() or "support_slots"
 
         self._source_a = SourceState(
             source_id=source_a_id,
@@ -84,6 +93,7 @@ class SupportDetectionMux(Node):
 
         self._out_detection_pub = self.create_publisher(String, self.out_detection_topic, 10)
         self._out_status_pub = self.create_publisher(String, self.out_status_topic, 10)
+        self._out_summary_pub = self.create_publisher(String, self.out_summary_topic, 10)
 
         self.create_subscription(
             String,
@@ -118,7 +128,8 @@ class SupportDetectionMux(Node):
             f"sources=({self._source_a.source_id},{self._source_b.source_id}), "
             f"source_stale_timeout_s={self.source_stale_timeout_s:.2f}, "
             f"publish_rate_hz={self.publish_rate_hz:.1f}, "
-            f"out_detection={self.out_detection_topic}, out_status={self.out_status_topic}"
+            f"out_detection={self.out_detection_topic}, out_status={self.out_status_topic}, "
+            f"out_summary={self.out_summary_topic}, relation_source={self.relation_source}"
         )
 
     def _on_detection(self, source: SourceState, msg: String) -> None:
@@ -165,6 +176,7 @@ class SupportDetectionMux(Node):
         status_msg = String()
         status_msg.data = self._build_status_line(selected=selected, det=det, now_ns=now_ns)
         self._out_status_pub.publish(status_msg)
+        self._publish_summary(now_ns=now_ns, selected=selected, det=det, state=None, reason=None)
 
         self._current_source_id = selected.source_id
 
@@ -240,6 +252,61 @@ class SupportDetectionMux(Node):
             extras=extras,
         )
 
+    def _source_summary(self, source: SourceState, now_ns: int) -> dict[str, object]:
+        fields = parse_status_line(source.last_status_line)
+        det = source.last_detection.detection if source.last_detection is not None else None
+        metadata = source.last_detection.metadata if source.last_detection is not None else {}
+        return {
+            "source_id": source.source_id,
+            "fresh": self._is_fresh(source, now_ns),
+            "age_ms": self._source_age_ms(source, now_ns),
+            "state": fields.get("state", "NO_INPUT" if source.last_detection is None else "NO_DET"),
+            "reason": fields.get("reason", "no_input" if source.last_detection is None else "no_detection"),
+            "valid": det is not None,
+            "conf": -1.0 if det is None else float(det.conf),
+            "cls_id": None if det is None else det.cls_id,
+            "cls_name": "" if det is None else det.cls_name,
+            "track_id": None if det is None else det.track_id,
+            "track_state": "" if det is None else det.track_state,
+            "detection_topic": source.detection_topic,
+            "status_topic": source.status_topic,
+            "metadata": dict(metadata or {}),
+        }
+
+    def _publish_summary(
+        self,
+        *,
+        now_ns: int,
+        selected: Optional[SourceState],
+        det: Optional[Detection2D],
+        state: Optional[str],
+        reason: Optional[str],
+    ) -> None:
+        if state is None:
+            state = "OK" if det is not None else "NO_DET"
+        if reason is None:
+            reason = "selected_detection" if det is not None else "selected_no_detection"
+
+        payload = {
+            "schema": "lrs.support_observation.v1",
+            "stamp_ns": int(now_ns),
+            "owner": "dji0",
+            "state": state,
+            "reason": reason,
+            "selected_source": "none" if selected is None else selected.source_id,
+            "mux_strategy": "highest_confidence_valid",
+            "relation_source": self.relation_source,
+            "relation_quality": self.relation_quality,
+            "relation_note": self.relation_note,
+            "sources": [
+                self._source_summary(self._source_a, now_ns),
+                self._source_summary(self._source_b, now_ns),
+            ],
+        }
+        msg = String()
+        msg.data = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        self._out_summary_pub.publish(msg)
+
     def _publish_no_input(self, now_ns: int) -> None:
         out_msg = String()
         out_msg.data = encode_detection_payload(
@@ -265,6 +332,13 @@ class SupportDetectionMux(Node):
             },
         )
         self._out_status_pub.publish(status_msg)
+        self._publish_summary(
+            now_ns=now_ns,
+            selected=None,
+            det=None,
+            state="NO_INPUT",
+            reason="no_fresh_input",
+        )
 
 
 def main(args=None) -> None:

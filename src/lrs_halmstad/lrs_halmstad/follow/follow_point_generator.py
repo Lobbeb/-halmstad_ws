@@ -37,6 +37,7 @@ class FollowPointGenerator(Node):
         self.declare_parameter("target_estimate_topic", "/coord/leader_visual_target_estimate")
         self.declare_parameter("target_pose_topic", "/coord/leader_estimate")
         self.declare_parameter("prefer_target_pose_position", False)
+        self.declare_parameter("follow_core_alignment_enable", False)
         self.declare_parameter("uav_pose_topic", "")
         self.declare_parameter("camera_pose_topic", "")
         self.declare_parameter("out_topic", "/coord/leader_follow_point")
@@ -82,6 +83,9 @@ class FollowPointGenerator(Node):
         self.target_pose_topic = str(self.get_parameter("target_pose_topic").value).strip()
         self.prefer_target_pose_position = coerce_bool(
             self.get_parameter("prefer_target_pose_position").value
+        )
+        self.follow_core_alignment_enable = coerce_bool(
+            self.get_parameter("follow_core_alignment_enable").value
         )
         self.uav_pose_topic = (
             str(self.get_parameter("uav_pose_topic").value).strip() or f"/{self.uav_name}/pose"
@@ -328,6 +332,7 @@ class FollowPointGenerator(Node):
         msg.data = (
             f"state={state} "
             f"reason={reason} "
+            f"logic={'follow_core' if self.follow_core_alignment_enable else 'legacy'} "
             f"policy_mode={policy_mode} "
             f"estimate_mode={estimate_mode} "
             f"estimate_quality={estimate_quality:.3f} "
@@ -351,7 +356,7 @@ class FollowPointGenerator(Node):
         if not estimate.valid or not math.isfinite(estimate.range_m) or estimate.range_m <= 0.0:
             return None
         if (
-            self.prefer_target_pose_position
+            (self.follow_core_alignment_enable or self.prefer_target_pose_position)
             and self.last_target_pose_xy is not None
             and self._is_fresh(self.last_target_pose_stamp, self.target_pose_timeout_s, now)
         ):
@@ -489,7 +494,7 @@ class FollowPointGenerator(Node):
         return float(dir_x / norm), float(dir_y / norm)
 
     def _target_pose_heading_dir(self, now: Time) -> Optional[tuple[float, float]]:
-        if not self.prefer_target_pose_heading:
+        if not (self.follow_core_alignment_enable or self.prefer_target_pose_heading):
             return None
         if self.last_target_pose_yaw is None:
             return None
@@ -623,9 +628,19 @@ class FollowPointGenerator(Node):
                         lateral_offset_scale = 1.0 - weak_quality * (
                             1.0 - self.tracked_lateral_offset_scale_min
                         )
-                    effective_lookahead = self.lookahead_horizon_s * lookahead_scale * max(
-                        0.25, estimate_quality if estimate_mode != "TRACKED" else 1.0
-                    )
+                    if self.follow_core_alignment_enable:
+                        # Integrated visual mode keeps the visual pipeline alive, but
+                        # forms the spatial follow target from the same pose/yaw
+                        # foundation and fixed standoff semantics as follow_uav.
+                        effective_lookahead = 0.0
+                        alpha_scale = 1.0
+                        recovery_blend = 0.0
+                        follow_distance_scale = 1.0
+                        lateral_offset_scale = 1.0
+                    else:
+                        effective_lookahead = self.lookahead_horizon_s * lookahead_scale * max(
+                            0.25, estimate_quality if estimate_mode != "TRACKED" else 1.0
+                        )
                     pred_target_x = float(target_x + self.target_world_vx_mps * effective_lookahead)
                     pred_target_y = float(target_y + self.target_world_vy_mps * effective_lookahead)
                     dir_x, dir_y, _base_policy_mode = self._select_follow_heading(
@@ -666,11 +681,14 @@ class FollowPointGenerator(Node):
                         camera_pose,
                         recovery_blend,
                     )
-                    follow_x, follow_y = self._smooth_follow_xy(
-                        raw_follow_x,
-                        raw_follow_y,
-                        alpha_scale=alpha_scale,
-                    )
+                    if self.follow_core_alignment_enable:
+                        follow_x, follow_y = raw_follow_x, raw_follow_y
+                    else:
+                        follow_x, follow_y = self._smooth_follow_xy(
+                            raw_follow_x,
+                            raw_follow_y,
+                            alpha_scale=alpha_scale,
+                        )
                     yaw_cmd = solve_yaw_to_target(
                         follow_x,
                         follow_y,
