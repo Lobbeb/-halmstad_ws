@@ -1,5 +1,8 @@
+import os
+
 import yaml
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction, TimerAction
 from launch.conditions import IfCondition
@@ -278,6 +281,112 @@ def _launch_bool(context, name: str) -> bool:
     return raw in ('1', 'true', 'yes', 'on')
 
 
+def _launch_float(context, name: str) -> float:
+    return float(LaunchConfiguration(name).perform(context))
+
+
+def _launch_str(context, name: str) -> str:
+    return LaunchConfiguration(name).perform(context)
+
+
+def _build_follow_odom_node(context, *args, **kwargs):
+    follow_params = _load_node_params_from_yaml(context, 'follow_uav')
+    follow_params.update({
+        'use_sim_time': True,
+        'world': _launch_str(context, 'world'),
+        'uav_name': _launch_str(context, 'uav_name'),
+        'leader_odom_topic': _launch_str(context, 'ugv_odom_topic'),
+        'uav_start_x': _launch_float(context, 'uav_start_x'),
+        'uav_start_y': _launch_float(context, 'uav_start_y'),
+        'uav_start_z': _launch_float(context, 'uav_start_z'),
+        'uav_start_yaw_deg': _launch_float(context, 'uav_start_yaw_deg'),
+        'follow_yaw': _launch_bool(context, 'follow_yaw'),
+        'leader_heading_offset_deg': _launch_float(context, 'leader_heading_offset_deg'),
+        'require_uav_actual_before_motion': _launch_bool(context, 'require_uav_actual_before_motion'),
+        'publish_pose_cmd_topics': _launch_bool(context, 'publish_pose_cmd_topics'),
+        'start_delay_s': _launch_float(context, 'uav_start_delay_s'),
+    })
+    return [
+        Node(
+            package='lrs_halmstad',
+            executable='follow_uav_odom',
+            name='follow_uav',
+            output='screen',
+            parameters=[follow_params],
+        )
+    ]
+
+
+def _build_follow_estimate_node(context, *args, **kwargs):
+    follow_params = _load_node_params_from_yaml(context, 'follow_uav')
+    follow_params.update({
+        'use_sim_time': True,
+        'world': _launch_str(context, 'world'),
+        'uav_name': _launch_str(context, 'uav_name'),
+        'leader_input_type': _launch_str(context, 'leader_mode'),
+        'leader_pose_topic': _launch_str(context, 'leader_pose_topic'),
+        'uav_start_x': _launch_float(context, 'uav_start_x'),
+        'uav_start_y': _launch_float(context, 'uav_start_y'),
+        'uav_start_z': _launch_float(context, 'uav_start_z'),
+        'uav_start_yaw_deg': _launch_float(context, 'uav_start_yaw_deg'),
+        'follow_yaw': _launch_bool(context, 'follow_yaw'),
+        'publish_pose_cmd_topics': _launch_bool(context, 'publish_pose_cmd_topics'),
+        'start_delay_s': _launch_float(context, 'uav_start_delay_s'),
+    })
+    return [
+        Node(
+            package='lrs_halmstad',
+            executable='follow_uav',
+            name='follow_uav',
+            output='screen',
+            parameters=[follow_params],
+        )
+    ]
+
+
+def _candidate_yaml_paths(path: str) -> list[str]:
+    _root, ext = os.path.splitext(path)
+    if ext:
+        return [path]
+    return [path, f'{path}.yaml', f'{path}.yml']
+
+
+def _resolve_nav2_goals_file(context) -> str:
+    nav2_goals = LaunchConfiguration('nav2_goals').perform(context).strip()
+    legacy_file = LaunchConfiguration('ugv_goal_sequence_file').perform(context).strip()
+    raw = nav2_goals or legacy_file
+    if not raw:
+        return ''
+
+    expanded = os.path.expandvars(os.path.expanduser(raw))
+    if os.path.isabs(expanded):
+        return expanded
+
+    config_dir = os.path.join(get_package_share_directory('lrs_halmstad'), 'config')
+    candidates = []
+
+    def add_candidates(base_path: str):
+        for candidate in _candidate_yaml_paths(base_path):
+            if candidate not in candidates:
+                candidates.append(candidate)
+
+    add_candidates(os.path.join(config_dir, expanded))
+
+    if os.path.dirname(expanded) == '':
+        add_candidates(os.path.join(config_dir, 'baylands_waypoints', expanded))
+        stem, _ = os.path.splitext(expanded)
+        if not stem.startswith('baylands_waypoints_'):
+            add_candidates(
+                os.path.join(config_dir, 'baylands_waypoints', f'baylands_waypoints_{expanded}')
+            )
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    return candidates[0]
+
+
 def _build_ugv_nav2_node(context, *args, **kwargs):
     nav2_params = _load_node_params_from_yaml(context, 'ugv_nav2_driver')
     nav2_params.update(
@@ -289,7 +398,7 @@ def _build_ugv_nav2_node(context, *args, **kwargs):
             'initial_pose_y': float(LaunchConfiguration('ugv_initial_pose_y').perform(context)),
             'initial_pose_yaw_deg': float(LaunchConfiguration('ugv_initial_pose_yaw_deg').perform(context)),
             'goal_sequence_csv': LaunchConfiguration('ugv_goal_sequence_csv').perform(context),
-            'goal_sequence_file': LaunchConfiguration('ugv_goal_sequence_file').perform(context),
+            'goal_sequence_file': _resolve_nav2_goals_file(context),
             'goal_sequence_randomize': _launch_bool(context, 'ugv_goal_sequence_randomize'),
             'goal_sequence_random_reverse': _launch_bool(context, 'ugv_goal_sequence_random_reverse'),
             'goal_sequence_relative_to_current_pose': _launch_bool(
@@ -315,7 +424,12 @@ def _build_omnet_nodes(context, *args, **kwargs):
         return []
     uav_name = LaunchConfiguration('uav_name').perform(context)
     ugv_ns = LaunchConfiguration('ugv_namespace').perform(context)
+    world = LaunchConfiguration('world').perform(context).strip()
     port = int(LaunchConfiguration('omnet_bridge_port').perform(context))
+    if world.startswith('baylands'):
+        ugv_omnet_odom_topic = f'/{ugv_ns}/ground_truth/odom'
+    else:
+        ugv_omnet_odom_topic = f'/{ugv_ns}/platform/odom'
     return [
         # Converts /dji0/pose (actual Gazebo pose) â†’ Odometry for the pose bridge.
         # Uses the true simulator position rather than the commanded pose so OMNeT
@@ -335,8 +449,9 @@ def _build_omnet_nodes(context, *args, **kwargs):
             }],
         ),
         # TCP server (port 5555): serves Gazebo UGV+UAV poses to OMNeT GazeboPositionScheduler.
-        # Keep OMNeT on raw sim odom for the UGV even though the main follow/dataset
-        # path uses AMCL-derived odom elsewhere in this workspace.
+        # Use Gazebo/world-frame poses for both vehicles so OMNeT link-distance
+        # metrics reflect true simulator separation.  Baylands platform/odom is
+        # local odometry and is not in the same frame as /<uav>/pose.
         Node(
             package='lrs_halmstad',
             executable='gazebo_pose_tcp_bridge',
@@ -345,7 +460,7 @@ def _build_omnet_nodes(context, *args, **kwargs):
             parameters=[{
                 'use_sim_time': True,
                 'port': port,
-                'odom_topics': [f'/{ugv_ns}/platform/odom', f'/{uav_name}/pose/odom'],
+                'odom_topics': [ugv_omnet_odom_topic, f'/{uav_name}/pose/odom'],
                 'model_names': ['robot', uav_name],
                 'auto_discover_pose_cmd_odom': False,
             }],
@@ -437,7 +552,12 @@ def generate_launch_description():
         [FindPackageShare('lrs_halmstad'), 'config', 'warehouse_waypoints.yaml']
     )
     baylands_waypoints_default = PathJoinSubstitution(
-        [FindPackageShare('lrs_halmstad'), 'config', 'baylands_waypoints.yaml']
+        [
+            FindPackageShare('lrs_halmstad'),
+            'config',
+            'baylands_waypoints',
+            'baylands_waypoints_parkinglot_west.yaml',
+        ]
     )
 
     params_file_arg = DeclareLaunchArgument(
@@ -455,7 +575,7 @@ def generate_launch_description():
         description="auto|true|false; auto starts estimator for pose/estimate, perception mode, or when yolo_weights is set",
     )
     follow_yaw_arg = DeclareLaunchArgument('follow_yaw', default_value='true')
-    publish_follow_debug_topics_arg = DeclareLaunchArgument('publish_follow_debug_topics', default_value='true')
+    publish_follow_debug_topics_arg = DeclareLaunchArgument('publish_follow_debug_topics', default_value='false')
     publish_pose_cmd_topics_arg = DeclareLaunchArgument('publish_pose_cmd_topics', default_value='true')
     require_uav_actual_before_motion_arg = DeclareLaunchArgument(
         'require_uav_actual_before_motion',
@@ -542,6 +662,15 @@ def generate_launch_description():
     ugv_goal_sequence_csv_arg = DeclareLaunchArgument(
         'ugv_goal_sequence_csv',
         default_value='',
+    )
+    nav2_goals_arg = DeclareLaunchArgument(
+        'nav2_goals',
+        default_value='',
+        description=(
+            'Nav2 route YAML. Relative values resolve under lrs_halmstad/config; bare Baylands '
+            'route names also search config/baylands_waypoints and may omit baylands_waypoints_ '
+            'and .yaml. Overrides ugv_goal_sequence_file.'
+        ),
     )
     ugv_goal_sequence_randomize_arg = DeclareLaunchArgument(
         'ugv_goal_sequence_randomize',
@@ -636,11 +765,11 @@ def generate_launch_description():
     )
     leader_actual_pose_enable_arg = DeclareLaunchArgument(
         'leader_actual_pose_enable',
-        default_value='true',
+        default_value='false',
     )
     camera_actual_pose_reacquire_enable_arg = DeclareLaunchArgument(
         'camera_actual_pose_reacquire_enable',
-        default_value='true',
+        default_value='false',
         description='Allow camera_tracker to use leader_actual_pose_topic for camera-only reacquisition when estimator pose is unavailable.',
     )
     leader_actual_heading_enable_arg = DeclareLaunchArgument(
@@ -927,57 +1056,14 @@ def generate_launch_description():
         ],
     )
 
-    follow_odom_node = Node(
-        package='lrs_halmstad',
-        executable='follow_uav_odom',
-        name='follow_uav',
-        output='screen',
+    follow_odom_node = OpaqueFunction(
+        function=_build_follow_odom_node,
         condition=_leader_odom_condition(),
-        parameters=[
-            LaunchConfiguration('params_file'),
-            {
-                'use_sim_time': True,
-                'world': LaunchConfiguration('world'),
-                'uav_name': LaunchConfiguration('uav_name'),
-                'leader_odom_topic': LaunchConfiguration('ugv_odom_topic'),
-                'uav_start_z': LaunchConfiguration('uav_start_z'),
-                'event_topic': LaunchConfiguration('event_topic'),
-                'follow_yaw': _bool_param('follow_yaw'),
-                'leader_heading_offset_deg': ParameterValue(
-                    LaunchConfiguration('leader_heading_offset_deg'),
-                    value_type=float,
-                ),
-                'require_uav_actual_before_motion': _bool_param('require_uav_actual_before_motion'),
-                'publish_debug_topics': _bool_param('publish_follow_debug_topics'),
-                'publish_pose_cmd_topics': _bool_param('publish_pose_cmd_topics'),
-                'start_delay_s': ParameterValue(LaunchConfiguration('uav_start_delay_s'), value_type=float),
-            },
-        ],
     )
 
-    follow_estimate_node = Node(
-        package='lrs_halmstad',
-        executable='follow_uav',
-        name='follow_uav',
-        output='screen',
+    follow_estimate_node = OpaqueFunction(
+        function=_build_follow_estimate_node,
         condition=_leader_nonodom_condition(),
-        parameters=[
-            LaunchConfiguration('params_file'),
-            {
-                'use_sim_time': True,
-                'world': LaunchConfiguration('world'),
-                'uav_name': LaunchConfiguration('uav_name'),
-                'leader_input_type': LaunchConfiguration('leader_mode'),
-                'leader_pose_topic': LaunchConfiguration('leader_pose_topic'),
-                'leader_actual_heading_enable': _bool_param('leader_actual_heading_enable'),
-                'leader_actual_heading_topic': LaunchConfiguration('leader_actual_heading_topic'),
-                'uav_start_z': LaunchConfiguration('uav_start_z'),
-                'follow_yaw': _bool_param('follow_yaw'),
-                'publish_debug_topics': _bool_param('publish_follow_debug_topics'),
-                'publish_pose_cmd_topics': _bool_param('publish_pose_cmd_topics'),
-                'start_delay_s': ParameterValue(LaunchConfiguration('uav_start_delay_s'), value_type=float),
-            },
-        ],
     )
 
     camera_tracker_node = OpaqueFunction(function=_build_camera_tracker_node)
@@ -1208,6 +1294,7 @@ def generate_launch_description():
         ugv_initial_pose_y_arg,
         ugv_initial_pose_yaw_deg_arg,
         ugv_goal_sequence_csv_arg,
+        nav2_goals_arg,
         ugv_goal_sequence_randomize_arg,
         ugv_goal_sequence_random_reverse_arg,
         ugv_goal_sequence_relative_to_current_pose_arg,

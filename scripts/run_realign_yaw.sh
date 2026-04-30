@@ -14,6 +14,11 @@ TARGET_Z=""
 TARGET_YAW="0.0"
 YAW_SET="false"
 WAYPOINT_NAME=""
+WITH_UAV="false"
+UAV_NAME="dji0"
+UAV_BODY_X_OFFSET="-7.0"
+UAV_BODY_Y_OFFSET="0.0"
+UAV_Z=""
 KEEP_PAUSED="false"
 DRY_RUN="false"
 BAYLANDS_WAYPOINT_CSV="$WS_ROOT/maps/waypoints_baylands.csv"
@@ -25,14 +30,15 @@ PAUSED_SIM="false"
 
 usage() {
   cat <<'EOF'
-Usage: ./run.sh realign_yaw [world] [x:=...] [y:=...] [z:=...] [yaw:=0.0] [waypoint:=name] [keep_paused:=false] [dry_run:=false]
+Usage: ./run.sh realign_yaw [world] [x:=...] [y:=...] [z:=...] [yaw:=0.0] [waypoint:=name] [with_uav:=false] [uav_name:=dji0] [uav_z:=7.0] [keep_paused:=false] [dry_run:=false]
 
 Examples:
   ./run.sh realign_yaw
   ./run.sh realign_yaw baylands
   ./run.sh realign_yaw yaw:=0.0
   ./run.sh realign_yaw x:=10.0 y:=20.0
-  ./run.sh realign_yaw baylands waypoint:=art
+  ./run.sh realign_yaw baylands waypoint:=art1
+  ./run.sh realign_yaw baylands waypoint:=art1 with_uav:=true keep_paused:=true
   ./run.sh realign_yaw baylands x:=10.0 y:=20.0 z:=0.2 yaw:=0.0
   ./run.sh realign_yaw baylands yaw:=0.0
   ./run.sh realign_yaw dry_run:=true
@@ -92,6 +98,39 @@ for path in paths:
 
 available = ", ".join(dict.fromkeys(names))
 raise SystemExit(f"Waypoint '{name}' was not found. Available: {available}")
+PY
+}
+
+compute_uav_pose_from_ugv_target_env() {
+  local ugv_x="$1"
+  local ugv_y="$2"
+  local ugv_yaw="$3"
+  local body_x_offset="$4"
+  local body_y_offset="$5"
+  local uav_z="$6"
+
+  python3 - "$ugv_x" "$ugv_y" "$ugv_yaw" "$body_x_offset" "$body_y_offset" "$uav_z" <<'PY'
+import math
+import sys
+
+ugv_x = float(sys.argv[1])
+ugv_y = float(sys.argv[2])
+ugv_yaw = float(sys.argv[3])
+body_x_offset = float(sys.argv[4])
+body_y_offset = float(sys.argv[5])
+uav_z = float(sys.argv[6])
+
+uav_x = ugv_x + body_x_offset * math.cos(ugv_yaw) - body_y_offset * math.sin(ugv_yaw)
+uav_y = ugv_y + body_x_offset * math.sin(ugv_yaw) + body_y_offset * math.cos(ugv_yaw)
+uav_qz = math.sin(0.5 * ugv_yaw)
+uav_qw = math.cos(0.5 * ugv_yaw)
+
+print(f"uav_x={uav_x:.9f}")
+print(f"uav_y={uav_y:.9f}")
+print(f"uav_z={uav_z:.9f}")
+print(f"uav_yaw={ugv_yaw:.9f}")
+print(f"uav_qz={uav_qz:.9f}")
+print(f"uav_qw={uav_qw:.9f}")
 PY
 }
 
@@ -162,6 +201,21 @@ while [ "$#" -gt 0 ]; do
     waypoint:=*)
       WAYPOINT_NAME="${1#waypoint:=}"
       ;;
+    with_uav:=*|teleport_uav:=*)
+      WITH_UAV="$(coerce_bool "${1#*:=}")"
+      ;;
+    uav_name:=*|name:=*)
+      UAV_NAME="${1#*:=}"
+      ;;
+    uav_body_x_offset:=*|uav_x_offset:=*)
+      UAV_BODY_X_OFFSET="${1#*:=}"
+      ;;
+    uav_body_y_offset:=*|uav_y_offset:=*)
+      UAV_BODY_Y_OFFSET="${1#*:=}"
+      ;;
+    uav_z:=*|height:=*)
+      UAV_Z="${1#*:=}"
+      ;;
     keep_paused:=*)
       KEEP_PAUSED="$(coerce_bool "${1#keep_paused:=}")"
       ;;
@@ -225,27 +279,52 @@ if ! POSE_ENV="$(slam_state_capture_gazebo_pose_env "$WS_ROOT" "$WORLD" 5)"; the
 fi
 
 eval "$POSE_ENV"
+CURRENT_X="$spawn_x"
+CURRENT_Y="$spawn_y"
+CURRENT_Z="$spawn_z"
+CURRENT_YAW="$spawn_yaw"
 
 if [ -z "$TARGET_X" ]; then
-  TARGET_X="$spawn_x"
+  TARGET_X="$CURRENT_X"
 fi
 if [ -z "$TARGET_Y" ]; then
-  TARGET_Y="$spawn_y"
+  TARGET_Y="$CURRENT_Y"
 fi
 if [ -z "$TARGET_Z" ]; then
-  TARGET_Z="$spawn_z"
+  TARGET_Z="$CURRENT_Z"
+fi
+
+if [ "$WITH_UAV" = "true" ] && [ -z "$UAV_Z" ]; then
+  UAV_POSE_ENV="$(slam_state_capture_gazebo_named_pose_env "$WORLD" "$UAV_NAME" 2)" || true
+  if [ -n "${UAV_POSE_ENV:-}" ]; then
+    eval "$UAV_POSE_ENV"
+    UAV_Z="$spawn_z"
+  else
+    UAV_Z="7.0"
+  fi
 fi
 
 read -r TARGET_QZ TARGET_QW <<< "$(awk -v yaw="$TARGET_YAW" 'BEGIN { printf "%.9f %.9f\n", sin(yaw / 2.0), cos(yaw / 2.0) }')"
+
+if [ "$WITH_UAV" = "true" ]; then
+  UAV_TARGET_ENV="$(compute_uav_pose_from_ugv_target_env \
+    "$TARGET_X" \
+    "$TARGET_Y" \
+    "$TARGET_YAW" \
+    "$UAV_BODY_X_OFFSET" \
+    "$UAV_BODY_Y_OFFSET" \
+    "$UAV_Z")"
+  eval "$UAV_TARGET_ENV"
+fi
 
 cat <<EOF
 [run_realign_yaw] World: $WORLD
 Entity: $ENTITY_NAME
 Current pose:
-  x=$spawn_x
-  y=$spawn_y
-  z=$spawn_z
-  yaw=$spawn_yaw
+  x=$CURRENT_X
+  y=$CURRENT_Y
+  z=$CURRENT_Z
+  yaw=$CURRENT_YAW
 Target pose:
   x=$TARGET_X
   y=$TARGET_Y
@@ -254,6 +333,21 @@ Target pose:
   qz=$TARGET_QZ
   qw=$TARGET_QW
 EOF
+
+if [ "$WITH_UAV" = "true" ]; then
+  cat <<EOF
+UAV target:
+  entity=$UAV_NAME
+  body_offset_x=$UAV_BODY_X_OFFSET
+  body_offset_y=$UAV_BODY_Y_OFFSET
+  x=$uav_x
+  y=$uav_y
+  z=$uav_z
+  yaw=$uav_yaw
+  qz=$uav_qz
+  qw=$uav_qw
+EOF
+fi
 
 if [ "$DRY_RUN" = "true" ]; then
   cat <<EOF
@@ -267,6 +361,13 @@ ros2 run ros_gz_bridge parameter_bridge /world/${GZ_WORLD}/set_pose@ros_gz_inter
 [dry-run] Would set pose:
 ros2 service call ${SERVICE_NAME} ros_gz_interfaces/srv/SetEntityPose "{entity: {name: '${ENTITY_NAME}', type: 2}, pose: {position: {x: ${TARGET_X}, y: ${TARGET_Y}, z: ${TARGET_Z}}, orientation: {x: 0.0, y: 0.0, z: ${TARGET_QZ}, w: ${TARGET_QW}}}}"
 EOF
+  if [ "$WITH_UAV" = "true" ]; then
+    cat <<EOF
+
+[dry-run] Would set UAV pose:
+ros2 service call ${SERVICE_NAME} ros_gz_interfaces/srv/SetEntityPose "{entity: {name: '${UAV_NAME}', type: 2}, pose: {position: {x: ${uav_x}, y: ${uav_y}, z: ${uav_z}}, orientation: {x: 0.0, y: 0.0, z: ${uav_qz}, w: ${uav_qw}}}}"
+EOF
+  fi
   if [ "$KEEP_PAUSED" != "true" ]; then
     cat <<EOF
 
@@ -306,6 +407,14 @@ ros2 service call \
   "$SERVICE_NAME" \
   ros_gz_interfaces/srv/SetEntityPose \
   "{entity: {name: '${ENTITY_NAME}', type: 2}, pose: {position: {x: ${TARGET_X}, y: ${TARGET_Y}, z: ${TARGET_Z}}, orientation: {x: 0.0, y: 0.0, z: ${TARGET_QZ}, w: ${TARGET_QW}}}}" >/dev/null
+
+if [ "$WITH_UAV" = "true" ]; then
+  echo "[run_realign_yaw] Setting UAV pose"
+  ros2 service call \
+    "$SERVICE_NAME" \
+    ros_gz_interfaces/srv/SetEntityPose \
+    "{entity: {name: '${UAV_NAME}', type: 2}, pose: {position: {x: ${uav_x}, y: ${uav_y}, z: ${uav_z}}, orientation: {x: 0.0, y: 0.0, z: ${uav_qz}, w: ${uav_qw}}}}" >/dev/null
+fi
 
 if [ "$STARTED_BRIDGE" = "true" ] && [ -n "$BRIDGE_PID" ]; then
   stop_bridge_process "$BRIDGE_PID" || true

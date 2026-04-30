@@ -88,6 +88,7 @@ class SimDatasetCapture(Node):
         self.declare_parameter("class_name", "ugv")
         self.declare_parameter("camera_pose_timeout_s", 10.0)
         self.declare_parameter("image_timeout_s", 10.0)
+        self.declare_parameter("capture_hz", 2.0, dyn_num)
         self.declare_parameter("val_every_n", 10)
         self.declare_parameter("save_metadata", True)
         self.declare_parameter("save_overlay", True)
@@ -113,6 +114,7 @@ class SimDatasetCapture(Node):
         self.class_name = str(self.get_parameter("class_name").value).strip() or "ugv"
         self.camera_pose_timeout_s = float(self.get_parameter("camera_pose_timeout_s").value)
         self.image_timeout_s = float(self.get_parameter("image_timeout_s").value)
+        self.capture_hz = float(self.get_parameter("capture_hz").value)
         self.val_every_n = int(self.get_parameter("val_every_n").value)
         self.save_metadata = bool(self.get_parameter("save_metadata").value)
         self.save_overlay = bool(self.get_parameter("save_overlay").value)
@@ -128,6 +130,8 @@ class SimDatasetCapture(Node):
             raise RuntimeError("OpenCV (cv2) is required for sim_dataset_capture")
         if self.class_id < 0:
             raise ValueError("class_id must be >= 0")
+        if self.capture_hz < 0.0:
+            raise ValueError("capture_hz must be >= 0")
         if self.target_length_m <= 0.0 or self.target_width_m <= 0.0 or self.target_height_m <= 0.0:
             raise ValueError("target dimensions must be > 0")
 
@@ -139,6 +143,7 @@ class SimDatasetCapture(Node):
         self.last_camera_pose_recv: Optional[float] = None  # wall time
         self.last_target_pose: Optional[Pose3D] = None
         self.last_target_pose_stamp: Optional[Time] = None
+        self.last_capture_time_ns: Optional[int] = None
         self.capture_index = 0
         self.last_wait_reason: str = "init"
 
@@ -154,7 +159,8 @@ class SimDatasetCapture(Node):
         self.get_logger().info(
             f"[sim_dataset_capture] Started: image={self.camera_topic}, info={self.camera_info_topic}, "
             f"camera_pose={self.camera_pose_topic}, target_pose={self.target_pose_topic}, "
-            f"output_dir={self.output_dir}, trigger=amcl_pose_odom, class={self.class_name}:{self.class_id}"
+            f"output_dir={self.output_dir}, capture_hz={self.capture_hz:g}, "
+            f"trigger=target_pose, class={self.class_name}:{self.class_id}"
         )
 
     def _ensure_dataset_layout(self) -> None:
@@ -238,12 +244,14 @@ class SimDatasetCapture(Node):
         self._try_capture()
 
     def _status_tick(self) -> None:
-        if self.last_wait_reason != "capturing":
+        if self.last_wait_reason not in ("capturing", "rate_limited"):
             self.get_logger().info(f"[sim_dataset_capture] Waiting: {self.last_wait_reason}")
 
     def _try_capture(self) -> None:
         now = self.get_clock().now()
         if not self._ready(now):
+            return
+        if not self._capture_rate_ready(now):
             return
 
         msg = self.last_image
@@ -259,6 +267,7 @@ class SimDatasetCapture(Node):
 
         subset = "val" if self.val_every_n > 0 and ((self.capture_index + 1) % self.val_every_n == 0) else "train"
         stem = self._frame_stem(msg)
+        stem = self._unique_frame_stem(subset, stem)
 
         image_path = os.path.join(self.output_dir, "images", subset, f"{stem}.jpg")
         label_path = os.path.join(self.output_dir, "labels", subset, f"{stem}.txt")
@@ -284,11 +293,22 @@ class SimDatasetCapture(Node):
                 json.dump(metadata, fh, indent=2, sort_keys=True)
 
         self.capture_index += 1
+        self.last_capture_time_ns = now.nanoseconds
         self.last_wait_reason = "capturing"
         self.get_logger().info(
             f"[sim_dataset_capture] Saved frame {self.capture_index}: subset={subset} "
             f"bbox={'yes' if bbox is not None else 'no'} file={os.path.basename(image_path)}"
         )
+
+    def _capture_rate_ready(self, now: Time) -> bool:
+        if self.capture_hz <= 0.0 or self.last_capture_time_ns is None:
+            return True
+        interval_ns = int(1_000_000_000.0 / self.capture_hz)
+        elapsed_ns = now.nanoseconds - self.last_capture_time_ns
+        if elapsed_ns < 0 or elapsed_ns >= interval_ns:
+            return True
+        self.last_wait_reason = "rate_limited"
+        return False
 
     def _ready(self, now: Time) -> bool:
         if self.camera_model is None:
@@ -322,6 +342,25 @@ class SimDatasetCapture(Node):
         except Exception:
             stamp = self.get_clock().now()
         return f"frame_{self.capture_index:06d}_{stamp.nanoseconds}"
+
+    def _unique_frame_stem(self, subset: str, stem: str) -> str:
+        def paths_for(candidate: str) -> List[str]:
+            paths = [
+                os.path.join(self.output_dir, "images", subset, f"{candidate}.jpg"),
+                os.path.join(self.output_dir, "labels", subset, f"{candidate}.txt"),
+            ]
+            if self.save_overlay:
+                paths.append(os.path.join(self.output_dir, "overlay", subset, f"{candidate}.jpg"))
+            if self.save_metadata:
+                paths.append(os.path.join(self.output_dir, "metadata", subset, f"{candidate}.json"))
+            return paths
+
+        candidate = stem
+        suffix = 1
+        while any(os.path.exists(path) for path in paths_for(candidate)):
+            candidate = f"{stem}_r{suffix:03d}"
+            suffix += 1
+        return candidate
 
     def _image_to_bgr(self, msg: Image) -> Optional[np.ndarray]:
         try:

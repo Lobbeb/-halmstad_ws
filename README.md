@@ -15,7 +15,7 @@ Current tested baseline:
 
 Current Baylands follow baseline:
 1. `./run.sh tmux_1to1 baylands`
-2. For a grouped route: `./run.sh tmux_1to1 baylands waypoint:=parkinglot_east_0 mode:=follow ugv_goal_sequence_file:=/home/ruben/halmstad_ws/src/lrs_halmstad/config/baylands_waypoints/baylands_waypoints_parkinglot_east.yaml`
+2. For a grouped route: `./run.sh tmux_1to1 baylands waypoint:=parkinglot_east_0 mode:=follow nav2_goals:=parkinglot_east`
 
 Baylands Nav2 map quick notes:
 - Supported Baylands Nav2 maps are `maps/baylands_finished_v3_nav_20cm.yaml` and `maps/baylands_finished_v3_nav_20cm_merged.yaml`.

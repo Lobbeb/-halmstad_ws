@@ -31,12 +31,18 @@ class OmnetMetricsBridge(Node):
         self.declare_parameter("omnet_host", "127.0.0.1")
         self.declare_parameter("omnet_port", 5556)
         self.declare_parameter("reconnect_interval_s", 2.0)
+        self.declare_parameter("read_timeout_s", 5.0)
 
         self._host = self.get_parameter("omnet_host").get_parameter_value().string_value
         self._port = int(self.get_parameter("omnet_port").get_parameter_value().integer_value)
         self._reconnect_interval = float(
             self.get_parameter("reconnect_interval_s").get_parameter_value().double_value
         )
+        self._read_timeout = float(
+            self.get_parameter("read_timeout_s").get_parameter_value().double_value
+        )
+        if self._read_timeout <= 0.0:
+            self._read_timeout = 5.0
 
         self._pub_distance      = self.create_publisher(Float64, "/omnet/link_distance", 10)
         self._pub_rssi          = self.create_publisher(Float64, "/omnet/rssi_dbm", 10)
@@ -81,7 +87,7 @@ class OmnetMetricsBridge(Node):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(5.0)
         sock.connect((self._host, self._port))
-        sock.settimeout(None)  # blocking reads from here
+        sock.settimeout(self._read_timeout)
         self._sock = sock
         self.get_logger().info(
             f"Connected to OMNeT metrics server at {self._host}:{self._port}"
@@ -90,14 +96,22 @@ class OmnetMetricsBridge(Node):
     def _receive_loop(self) -> None:
         assert self._sock is not None
         buf = b""
+        last_line_at = time.monotonic()
         while not self._stop_event.is_set():
-            chunk = self._sock.recv(256)
+            try:
+                chunk = self._sock.recv(256)
+            except socket.timeout as exc:
+                age = time.monotonic() - last_line_at
+                raise TimeoutError(
+                    f"no OMNeT metrics received for {age:.1f}s after connecting"
+                ) from exc
             if not chunk:
                 raise ConnectionResetError("OMNeT closed the connection")
             buf += chunk
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
                 self._handle_line(line.decode("ascii", errors="ignore").strip())
+                last_line_at = time.monotonic()
 
     def _handle_line(self, line: str) -> None:
         if not line:

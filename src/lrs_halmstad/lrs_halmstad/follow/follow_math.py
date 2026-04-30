@@ -128,10 +128,12 @@ def solve_yaw_to_target(
     uav_y: float,
     target_x: float,
     target_y: float,
-    camera_x_offset_m: float,
+    camera_x_offset_m: float = 0.0,
     camera_y_offset_m: float = 0.0,
 ) -> float:
     yaw = math.atan2(target_y - uav_y, target_x - uav_x)
+    if abs(camera_x_offset_m) <= 1e-12 and abs(camera_y_offset_m) <= 1e-12:
+        return yaw
     for _ in range(15):
         cam_x, cam_y = camera_xy_from_uav_pose(
             uav_x,

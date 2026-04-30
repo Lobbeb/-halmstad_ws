@@ -377,6 +377,8 @@ class VisualActuationBridge(Node):
                 state="WAIT_START",
                 reason="startup_delay",
                 active_input="none",
+                estimate_mode="WAIT_START",
+                estimate_quality=0.0,
                 forward_cmd_mps=0.0,
                 yaw_rate_cmd_rad_s=0.0,
                 dt_s=dt_s,

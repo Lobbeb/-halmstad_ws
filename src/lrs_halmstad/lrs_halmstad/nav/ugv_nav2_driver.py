@@ -57,6 +57,19 @@ def rotate_offset(x_local: float, y_local: float, yaw: float) -> tuple[float, fl
     )
 
 
+def yaw_from_wxyz(values) -> float:
+    if not isinstance(values, (list, tuple)) or len(values) != 4:
+        raise ValueError("RViz waypoint orientation must be [w, x, y, z]")
+    qw = float(values[0])
+    qx = float(values[1])
+    qy = float(values[2])
+    qz = float(values[3])
+    return math.atan2(
+        2.0 * (qw * qz + qx * qy),
+        1.0 - 2.0 * (qy * qy + qz * qz),
+    )
+
+
 class UgvNav2Driver(Node):
     def __init__(self) -> None:
         super().__init__("ugv_nav2_driver")
@@ -454,12 +467,33 @@ class UgvNav2Driver(Node):
             data = yaml.safe_load(handle) or {}
 
         raw_waypoints = data.get("waypoints")
-        if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
+        if isinstance(raw_waypoints, dict):
+            ordered_waypoints = []
+            for name, waypoint in raw_waypoints.items():
+                if not isinstance(waypoint, dict):
+                    raise ValueError("RViz goal_sequence_file waypoints must be mappings")
+                pose = waypoint.get("pose")
+                if not isinstance(pose, (list, tuple)) or len(pose) < 2:
+                    raise ValueError("RViz goal_sequence_file waypoints must contain pose [x, y, z]")
+                parsed_waypoint = {
+                    "name": str(name),
+                    "x": float(pose[0]),
+                    "y": float(pose[1]),
+                }
+                orientation = waypoint.get("orientation")
+                if orientation is not None:
+                    parsed_waypoint["yaw_rad"] = yaw_from_wxyz(orientation)
+                ordered_waypoints.append(parsed_waypoint)
+        elif isinstance(raw_waypoints, list):
+            ordered_waypoints = list(raw_waypoints)
+        else:
+            raise ValueError("goal_sequence_file must contain a waypoint list or RViz waypoint mapping")
+
+        if len(ordered_waypoints) < 2:
             raise ValueError("goal_sequence_file must contain at least two waypoints")
 
         seed = self.goal_sequence_seed if self.goal_sequence_seed >= 0 else int(time.time_ns() & 0xFFFFFFFF)
         rng = random.Random(seed)
-        ordered_waypoints = list(raw_waypoints)
         fixed_last_waypoint = ordered_waypoints[-1]
         randomizable_waypoints = ordered_waypoints[:-1]
 
@@ -480,9 +514,12 @@ class UgvNav2Driver(Node):
 
             x_val = float(waypoint["x"])
             y_val = float(waypoint["y"])
+            yaw_rad = waypoint.get("yaw_rad")
             yaw_deg = waypoint.get("yaw_deg")
 
-            if yaw_deg is None:
+            if yaw_rad is not None:
+                yaw_rad = float(yaw_rad)
+            elif yaw_deg is None:
                 next_waypoint = ordered_waypoints[(index + 1) % count]
                 next_x = float(next_waypoint["x"])
                 next_y = float(next_waypoint["y"])

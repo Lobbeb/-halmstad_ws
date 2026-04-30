@@ -26,6 +26,7 @@ BAYLANDS_DEFAULT_X="0.0"
 BAYLANDS_DEFAULT_Y="0.0"
 BAYLANDS_DEFAULT_Z="0.8"
 BAYLANDS_DEFAULT_YAW="0.0"
+BAYLANDS_DEFAULT_WAYPOINT="parkinglot_west_0"
 BAYLANDS_WAYPOINT_CSV="$WS_ROOT/maps/waypoints_baylands.csv"
 BAYLANDS_GROUP_WAYPOINT_CSV="$WS_ROOT/maps/waypoints_baylands_groups.csv"
 
@@ -193,6 +194,17 @@ fi
 
 if [ -z "$WORLD" ]; then
   WORLD="warehouse"
+fi
+
+if [ "$WORLD" = "baylands" ] && \
+   [ -z "$SPAWN_STATE_NAME" ] && \
+   [ -z "$WAYPOINT_NAME" ] && \
+   [ "$X_SET" = "false" ] && \
+   [ "$Y_SET" = "false" ] && \
+   [ "$Z_SET" = "false" ] && \
+   [ "$YAW_SET" = "false" ]; then
+  WAYPOINT_NAME="$BAYLANDS_DEFAULT_WAYPOINT"
+  echo "[run_gazebo_sim] Using Baylands default waypoint: waypoint:=$WAYPOINT_NAME"
 fi
 
 if [ -n "$WAYPOINT_NAME" ]; then

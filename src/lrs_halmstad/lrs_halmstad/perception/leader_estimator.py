@@ -48,7 +48,7 @@ class CameraModel:
 
 
 class LeaderEstimator(EventEmitterMixin, Node):
-    """Estimator-only node that turns external detections into a world-frame leader pose."""
+    """Estimator-only node that turns external detections into a leader pose."""
 
     def __init__(self):
         super().__init__("leader_estimator")
@@ -137,6 +137,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
 
         self.camera_model: Optional[CameraModel] = None
         self.uav_pose: Optional[Pose3D] = None
+        self.uav_pose_frame_id: str = ""
         self.last_uav_pose_stamp: Optional[Time] = None
         self.last_image_msg: Optional[Image] = None
         self.last_image_stamp: Optional[Time] = None
@@ -159,6 +160,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.last_follow_debug_heading_source: str = ""
         self.last_follow_debug_heading_stamp: Optional[Time] = None
         self.last_actual_leader_pose: Optional[Pose3D] = None
+        self.last_actual_leader_pose_frame_id: str = ""
         self.last_actual_leader_pose_stamp: Optional[Time] = None
         self.last_radio_range_m: Optional[float] = None
         self.last_radio_range_stamp: Optional[Time] = None
@@ -180,6 +182,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.last_fault_state: str = "none"
         self.last_fault_reason: str = "none"
         self.last_fault_stamp: Optional[Time] = None
+        self._estimate_error_frame_warn_logged = False
         self.last_debug_state: str = "INIT"
         self.last_debug_det: Optional[Detection2D] = None
         self.audit_ticks_total = 0
@@ -417,6 +420,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
     def on_uav_pose(self, msg: PoseStamped) -> None:
         p = msg.pose.position
         q = msg.pose.orientation
+        self.uav_pose_frame_id = str(msg.header.frame_id or "").strip()
         self.uav_pose = Pose3D(
             x=float(p.x),
             y=float(p.y),
@@ -431,6 +435,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
     def on_actual_leader_pose(self, msg: Odometry) -> None:
         p = msg.pose.pose.position
         q = msg.pose.pose.orientation
+        self.last_actual_leader_pose_frame_id = str(msg.header.frame_id or "").strip()
         self.last_actual_leader_pose = Pose3D(
             x=float(p.x),
             y=float(p.y),
@@ -800,10 +805,14 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.last_reject_reason = depth_reject_reason
         return Pose3D(x=x, y=y, z=self.target_ground_z_m, yaw=yaw), range_source
 
+    def _estimate_frame_id(self) -> str:
+        return self.uav_pose_frame_id or "map"
+
     def _publish_estimate(self, pose: Pose3D, now: Time, track_id: Optional[int]) -> None:
+        frame_id = self._estimate_frame_id()
         msg = PoseStamped()
         msg.header.stamp = now.to_msg()
-        msg.header.frame_id = "map"
+        msg.header.frame_id = frame_id
         msg.pose.position.x = float(pose.x)
         msg.pose.position.y = float(pose.y)
         msg.pose.position.z = float(pose.z)
@@ -817,9 +826,9 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.last_estimate_stamp = now
         self.last_estimate_track_id = track_id
         self.prev_heading_yaw = pose.yaw
-        self._publish_estimate_error(pose, now)
+        self._publish_estimate_error(pose, now, frame_id)
 
-    def _publish_estimate_error(self, est_pose: Pose3D, now: Time) -> None:
+    def _publish_estimate_error(self, est_pose: Pose3D, now: Time, estimate_frame_id: str) -> None:
         if not self.leader_actual_pose_enable or self.estimate_error_pub is None:
             self.last_estimate_error_dx_m = None
             self.last_estimate_error_dy_m = None
@@ -830,6 +839,19 @@ class LeaderEstimator(EventEmitterMixin, Node):
             self.last_estimate_error_dy_m = None
             self.last_estimate_error_m = None
             return
+        actual_frame_id = self.last_actual_leader_pose_frame_id or estimate_frame_id
+        if actual_frame_id != estimate_frame_id:
+            self.last_estimate_error_dx_m = None
+            self.last_estimate_error_dy_m = None
+            self.last_estimate_error_m = None
+            if not self._estimate_error_frame_warn_logged:
+                self.get_logger().warn(
+                    "[leader_estimator] Skipping estimate_error: "
+                    f"estimate frame '{estimate_frame_id}' differs from actual pose frame '{actual_frame_id}'"
+                )
+                self._estimate_error_frame_warn_logged = True
+            return
+        self._estimate_error_frame_warn_logged = False
         dx = est_pose.x - self.last_actual_leader_pose.x
         dy = est_pose.y - self.last_actual_leader_pose.y
         planar = math.hypot(dx, dy)
@@ -838,7 +860,7 @@ class LeaderEstimator(EventEmitterMixin, Node):
         self.last_estimate_error_m = planar
         msg = Vector3Stamped()
         msg.header.stamp = now.to_msg()
-        msg.header.frame_id = "map"
+        msg.header.frame_id = estimate_frame_id
         msg.vector.x = float(dx)
         msg.vector.y = float(dy)
         msg.vector.z = float(planar)

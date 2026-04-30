@@ -113,7 +113,7 @@ Current Baylands follow shortcuts:
 cd /home/ruben/halmstad_ws
 ./run.sh tmux_1to1 baylands
 ./run.sh tmux_1to1 baylands waypoint:=parkinglot_east_0 mode:=follow \
-  ugv_goal_sequence_file:=/home/ruben/halmstad_ws/src/lrs_halmstad/config/baylands_waypoints/baylands_waypoints_parkinglot_east.yaml
+  nav2_goals:=parkinglot_east
 ```
 
 Direct Baylands stack:
@@ -125,7 +125,7 @@ cd /home/ruben/halmstad_ws
 ./run.sh localization baylands lidar:=3d
 ./run.sh nav2 lidar:=3d
 ./run.sh 1to1_follow baylands \
-  ugv_goal_sequence_file:=/home/ruben/halmstad_ws/src/lrs_halmstad/config/baylands_waypoints/baylands_waypoints_parkinglot_east.yaml
+  nav2_goals:=parkinglot_east
 ```
 
 ## Baylands Nav2 map maintenance

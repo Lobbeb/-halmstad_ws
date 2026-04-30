@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WS_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 STATE_DIR="/tmp/halmstad_ws"
 SIM_WORLD_FILE="$STATE_DIR/gazebo_sim.world"
+BAYLANDS_WAYPOINT_CSV="$WS_ROOT/maps/waypoints_baylands.csv"
+BAYLANDS_GROUP_WAYPOINT_CSV="$WS_ROOT/maps/waypoints_baylands_groups.csv"
+BAYLANDS_DEFAULT_NAV2_GOALS="parkinglot_west"
 WORLD="warehouse"
 EXTRA_ARGS=()
 USE_ESTIMATE="true"
@@ -14,6 +17,7 @@ USE_OBB="true"
 USE_TRACKER="true"
 EXTERNAL_DETECTION_NODE="detector"
 LEADER_RANGE_MODE="auto"
+START_OMNET_BRIDGE=""
 WEIGHTS_REL=""
 MODEL_SUBDIR=""
 HAVE_UAV_START_X="false"
@@ -21,6 +25,7 @@ HAVE_UAV_START_Y="false"
 HAVE_UAV_START_YAW="false"
 HAVE_UAV_START_Z="false"
 HAVE_LEADER_ACTUAL_POSE_ENABLE="false"
+HAVE_CAMERA_ACTUAL_POSE_REACQUIRE_ENABLE="false"
 HAVE_UGV_ODOM_TOPIC="false"
 HAVE_LEADER_ACTUAL_POSE_TOPIC="false"
 HAVE_CAMERA_LEADER_ACTUAL_POSE_TOPIC="false"
@@ -32,11 +37,21 @@ HAVE_PUBLISH_CAMERA_DEBUG_TOPICS="false"
 HAVE_YOLO_DEVICE="false"
 HAVE_UGV_START_DELAY="false"
 HAVE_DETECTOR_BACKEND="false"
+HAVE_LEADER_RANGE_MODE="false"
+HAVE_UGV_INITIAL_POSE_X="false"
+HAVE_UGV_INITIAL_POSE_Y="false"
+HAVE_UGV_INITIAL_POSE_YAW="false"
+HAVE_START_VISUAL_ACTUATION_BRIDGE="false"
+HAVE_START_VISUAL_FOLLOW_CONTROLLER="false"
+HAVE_START_VISUAL_FOLLOW_POINT_GENERATOR="false"
+HAVE_START_VISUAL_FOLLOW_PLANNER="false"
+HAVE_UGV_GOAL_SEQUENCE="false"
 USE_CONDA=""
 CONDA_ENV_NAME="${LRS_HALMSTAD_GPU_ENV_NAME:-}"
-DEFAULT_CUSTOM_WEIGHTS="warehouse_v1-v2-yolo26n.pt"
-DEFAULT_DETECTION_WEIGHTS="warehouse_v1-v2-yolo26n.pt"
-DEFAULT_OBB_WEIGHTS="warehouse-v1-yolo26n-obb.pt"
+DEFAULT_CUSTOM_WEIGHTS="detection/mymodels/warehouse_v1-v2-yolo26n.pt"
+DEFAULT_DETECTION_WEIGHTS="detection/mymodels/warehouse_v1-v2-yolo26n.pt"
+DEFAULT_OBB_WEIGHTS="obb/mymodels/warehouse-v1-yolo26n-obb.pt"
+DEFAULT_BAYLANDS_OBB_WEIGHTS="obb/mymodels/baylands-v1-yolo26n-obb.pt"
 MODELS_ROOT="${LRS_HALMSTAD_MODELS_ROOT:-$WS_ROOT/models}"
 DEFAULT_UAV_BODY_X_OFFSET="-7.0"
 DEFAULT_UAV_BODY_Y_OFFSET="0.0"
@@ -127,6 +142,10 @@ for arg in "$@"; do
       HAVE_LEADER_ACTUAL_POSE_ENABLE="true"
       EXTRA_ARGS+=("$arg")
       ;;
+    camera_actual_pose_reacquire_enable:=*)
+      HAVE_CAMERA_ACTUAL_POSE_REACQUIRE_ENABLE="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
     leader_actual_pose_topic:=*)
       HAVE_LEADER_ACTUAL_POSE_TOPIC="true"
       EXTRA_ARGS+=("$arg")
@@ -148,6 +167,30 @@ for arg in "$@"; do
       ;;
     start_ugv_ground_truth_bridge:=*)
       HAVE_START_UGV_GROUND_TRUTH_BRIDGE="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    ugv_initial_pose_x:=*)
+      HAVE_UGV_INITIAL_POSE_X="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    ugv_initial_pose_y:=*)
+      HAVE_UGV_INITIAL_POSE_Y="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    ugv_initial_pose_yaw_deg:=*)
+      HAVE_UGV_INITIAL_POSE_YAW="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    goal_sequence_file:=*)
+      HAVE_UGV_GOAL_SEQUENCE="true"
+      EXTRA_ARGS+=("nav2_goals:=${arg#goal_sequence_file:=}")
+      ;;
+    goal_sequence_csv:=*)
+      HAVE_UGV_GOAL_SEQUENCE="true"
+      EXTRA_ARGS+=("ugv_goal_sequence_csv:=${arg#goal_sequence_csv:=}")
+      ;;
+    nav2_goals:=*|ugv_goal_sequence_file:=*|ugv_goal_sequence_csv:=*)
+      HAVE_UGV_GOAL_SEQUENCE="true"
       EXTRA_ARGS+=("$arg")
       ;;
     publish_follow_debug_topics:=*)
@@ -185,6 +228,22 @@ for arg in "$@"; do
       HAVE_DETECTOR_BACKEND="true"
       EXTRA_ARGS+=("$arg")
       ;;
+    start_visual_actuation_bridge:=*)
+      HAVE_START_VISUAL_ACTUATION_BRIDGE="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    start_visual_follow_controller:=*)
+      HAVE_START_VISUAL_FOLLOW_CONTROLLER="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    start_visual_follow_point_generator:=*)
+      HAVE_START_VISUAL_FOLLOW_POINT_GENERATOR="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
+    start_visual_follow_planner:=*)
+      HAVE_START_VISUAL_FOLLOW_PLANNER="true"
+      EXTRA_ARGS+=("$arg")
+      ;;
     conda_env:=*)
       CONDA_ENV_NAME="${arg#conda_env:=}"
       ;;
@@ -193,9 +252,11 @@ for arg in "$@"; do
       ;;
     range_mode:=*)
       LEADER_RANGE_MODE="${arg#range_mode:=}"
+      HAVE_LEADER_RANGE_MODE="true"
       ;;
     leader_range_mode:=*)
       LEADER_RANGE_MODE="${arg#leader_range_mode:=}"
+      HAVE_LEADER_RANGE_MODE="true"
       ;;
     uav_start_x:=*)
       HAVE_UAV_START_X="true"
@@ -218,13 +279,30 @@ for arg in "$@"; do
       EXTRA_ARGS+=("$arg")
       ;;
     omnet:=*)
-      EXTRA_ARGS+=("start_omnet_bridge:=${arg#omnet:=}")
+      START_OMNET_BRIDGE="${arg#omnet:=}"
+      EXTRA_ARGS+=("start_omnet_bridge:=$START_OMNET_BRIDGE")
+      ;;
+    start_omnet_bridge:=*)
+      START_OMNET_BRIDGE="${arg#start_omnet_bridge:=}"
+      EXTRA_ARGS+=("$arg")
       ;;
     *)
       EXTRA_ARGS+=("$arg")
       ;;
   esac
 done
+
+if [[ "$WORLD" == baylands* ]] && [ "$HAVE_UGV_GOAL_SEQUENCE" = "false" ]; then
+  EXTRA_ARGS+=("nav2_goals:=$BAYLANDS_DEFAULT_NAV2_GOALS")
+fi
+
+if [ "$HAVE_LEADER_RANGE_MODE" = "false" ]; then
+  case "$START_OMNET_BRIDGE" in
+    true|yes|1)
+      LEADER_RANGE_MODE="radio"
+      ;;
+  esac
+fi
 
 case "$USE_ESTIMATE" in
   true|false)
@@ -297,6 +375,8 @@ if [ -z "$WEIGHTS_REL" ]; then
   if [ "$USE_OBB" = true ]; then
     if [ -n "$MODEL_SUBDIR" ]; then
       WEIGHTS_REL="obb/$MODEL_SUBDIR/yolo26l-obb.pt"
+    elif [[ "$WORLD" == baylands* ]] && [ -f "$MODELS_ROOT/$DEFAULT_BAYLANDS_OBB_WEIGHTS" ]; then
+      WEIGHTS_REL="$DEFAULT_BAYLANDS_OBB_WEIGHTS"
     else
       WEIGHTS_REL="$DEFAULT_OBB_WEIGHTS"
     fi
@@ -361,11 +441,16 @@ if [ "$USE_ESTIMATE" = true ]; then
   fi
 fi
 
+LIVE_UAV_POSE_TIMEOUT_S=5
+if [[ "$WORLD" == baylands* ]]; then
+  LIVE_UAV_POSE_TIMEOUT_S=30
+fi
+
 if [ "$HAVE_UAV_START_X" = "false" ] && [ "$HAVE_UAV_START_Y" = "false" ]; then
   if UAV_START_ENV="$(slam_state_capture_gazebo_named_pose_env \
     "$WORLD" \
     "$UAV_NAME" \
-    5)"; then
+    "$LIVE_UAV_POSE_TIMEOUT_S")"; then
     eval "$UAV_START_ENV"
     EXTRA_ARGS+=("uav_start_x:=$spawn_x" "uav_start_y:=$spawn_y")
     if [ "$HAVE_UAV_START_Z" = "false" ]; then
@@ -380,7 +465,7 @@ PY
 )")
     fi
     echo "[run_1to1_yolo] Using live UAV pose for simulator start x=${spawn_x} y=${spawn_y} z=${spawn_z} yaw=${spawn_yaw}"
-  elif UAV_START_ENV="$(slam_state_capture_uav_spawn_from_ugv_env \
+  elif [[ "$WORLD" != baylands* ]] && UAV_START_ENV="$(slam_state_capture_uav_spawn_from_ugv_env \
     "$WS_ROOT" \
     "$WORLD" \
     "$DEFAULT_UAV_BODY_X_OFFSET" \
@@ -398,18 +483,82 @@ PY
     echo "[run_1to1_yolo] Using UGV-relative UAV start x=${uav_x} y=${uav_y} z=${uav_z} yaw_deg=${uav_yaw_deg}"
   else
     if [[ "$WORLD" == baylands* ]]; then
-      echo "[run_1to1_yolo] Error: could not read the live UGV pose for Baylands, so refusing to fall back to the generic UAV start (-7,0,7)." >&2
-      echo "[run_1to1_yolo] Start Gazebo and the UGV first, or pass explicit uav_start_x:=... uav_start_y:=... uav_start_z:=... uav_start_yaw_deg:=..." >&2
+      echo "[run_1to1_yolo] Error: could not read the live UAV pose for Baylands, so refusing to invent a startup pose." >&2
+      echo "[run_1to1_yolo] Start Gazebo and spawn the UAV first, or pass explicit uav_start_x:=... uav_start_y:=... uav_start_z:=... uav_start_yaw_deg:=..." >&2
       exit 2
     fi
     echo "[run_1to1_yolo] Warning: could not read the live UGV pose; falling back to the launch defaults." >&2
   fi
 fi
 
+add_ugv_initial_pose_from_baylands_waypoint_map() {
+  local timeout_s="$1"
+  local ugv_pose_env=""
+  local amcl_pose_env=""
+
+  ugv_pose_env="$(slam_state_capture_gazebo_pose_env "$WS_ROOT" "$WORLD" "$timeout_s")" || return 1
+  eval "$ugv_pose_env"
+  amcl_pose_env="$(
+    python3 - "$spawn_x" "$spawn_y" "$BAYLANDS_GROUP_WAYPOINT_CSV" "$BAYLANDS_WAYPOINT_CSV" <<'PY'
+import csv
+import math
+import sys
+
+world_x = float(sys.argv[1])
+world_y = float(sys.argv[2])
+paths = sys.argv[3:]
+best = None
+
+for path in paths:
+    try:
+        with open(path, "r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                try:
+                    x = float(row["x"])
+                    y = float(row["y"])
+                    amcl_x = float(row["amcl_x"])
+                    amcl_y = float(row["amcl_y"])
+                    amcl_yaw = float(row["amcl_yaw"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                distance = math.hypot(x - world_x, y - world_y)
+                if best is None or distance < best[0]:
+                    best = (distance, row.get("place", ""), amcl_x, amcl_y, amcl_yaw)
+    except FileNotFoundError:
+        continue
+
+if best is None or best[0] > 3.0:
+    raise SystemExit(1)
+
+distance, place, amcl_x, amcl_y, amcl_yaw = best
+print(f"ugv_waypoint_name={place!r}")
+print(f"ugv_waypoint_distance_m={distance:.9f}")
+print(f"ugv_amcl_x={amcl_x:.9f}")
+print(f"ugv_amcl_y={amcl_y:.9f}")
+print(f"ugv_amcl_yaw_deg={math.degrees(amcl_yaw):.9f}")
+PY
+  )" || return 1
+  eval "$amcl_pose_env"
+  if [ "$HAVE_UGV_INITIAL_POSE_X" = "false" ]; then
+    EXTRA_ARGS+=("ugv_initial_pose_x:=$ugv_amcl_x")
+  fi
+  if [ "$HAVE_UGV_INITIAL_POSE_Y" = "false" ]; then
+    EXTRA_ARGS+=("ugv_initial_pose_y:=$ugv_amcl_y")
+  fi
+  if [ "$HAVE_UGV_INITIAL_POSE_YAW" = "false" ]; then
+    EXTRA_ARGS+=("ugv_initial_pose_yaw_deg:=$ugv_amcl_yaw_deg")
+  fi
+  echo "[run_1to1_yolo] Using Baylands waypoint '$ugv_waypoint_name' for Nav2 initial pose x=${ugv_amcl_x} y=${ugv_amcl_y} yaw_deg=${ugv_amcl_yaw_deg} (world match ${ugv_waypoint_distance_m}m)"
+}
+
 if [[ "$WORLD" == baylands* ]]; then
   UGV_NAMESPACE="$(slam_state_namespace "$WS_ROOT" 2>/dev/null || true)"
   if [ -z "$UGV_NAMESPACE" ]; then
     UGV_NAMESPACE="a201_0000"
+  fi
+  if ! add_ugv_initial_pose_from_baylands_waypoint_map 10; then
+    echo "[run_1to1_yolo] Warning: could not resolve the live UGV world pose to a Baylands waypoint; Nav2 initial pose will use launch defaults." >&2
   fi
   if [ "$HAVE_UGV_ODOM_TOPIC" != "true" ]; then
     EXTRA_ARGS+=("ugv_odom_topic:=/$UGV_NAMESPACE/ground_truth/odom")
@@ -431,6 +580,9 @@ fi
 if [ "$HAVE_LEADER_ACTUAL_POSE_ENABLE" != true ]; then
   EXTRA_ARGS+=("leader_actual_pose_enable:=false")
 fi
+if [ "$HAVE_CAMERA_ACTUAL_POSE_REACQUIRE_ENABLE" != true ]; then
+  EXTRA_ARGS+=("camera_actual_pose_reacquire_enable:=false")
+fi
 if [ "$HAVE_PUBLISH_FOLLOW_DEBUG_TOPICS" != true ]; then
   EXTRA_ARGS+=("publish_follow_debug_topics:=false")
 fi
@@ -445,6 +597,18 @@ if [ "$HAVE_YOLO_DEVICE" != true ]; then
 fi
 if [ "$HAVE_UGV_START_DELAY" != true ]; then
   EXTRA_ARGS+=("ugv_start_delay_s:=12.0")
+fi
+if [ "$HAVE_START_VISUAL_ACTUATION_BRIDGE" != true ]; then
+  EXTRA_ARGS+=("start_visual_actuation_bridge:=false")
+fi
+if [ "$HAVE_START_VISUAL_FOLLOW_CONTROLLER" != true ]; then
+  EXTRA_ARGS+=("start_visual_follow_controller:=false")
+fi
+if [ "$HAVE_START_VISUAL_FOLLOW_POINT_GENERATOR" != true ]; then
+  EXTRA_ARGS+=("start_visual_follow_point_generator:=false")
+fi
+if [ "$HAVE_START_VISUAL_FOLLOW_PLANNER" != true ]; then
+  EXTRA_ARGS+=("start_visual_follow_planner:=false")
 fi
 
 case "$USE_CONDA" in
@@ -493,8 +657,5 @@ ros2 launch lrs_halmstad run_follow.launch.py \
   external_detection_node:="$EXTERNAL_DETECTION_NODE" \
   leader_range_mode:="$LEADER_RANGE_MODE" \
   yolo_weights:="$WEIGHTS_REL" \
-  start_visual_actuation_bridge:=true \
-  start_visual_follow_point_generator:=true \
-  start_visual_follow_planner:=true \
   "${EXTRA_ARGS[@]}" \
   world:="$WORLD"

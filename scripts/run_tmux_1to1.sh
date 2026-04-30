@@ -43,6 +43,8 @@ DEFAULT_UAV_Z="7.0"
 UGV_START_DELAY_OVERRIDE=""
 UAV_START_DELAY_OVERRIDE=""
 UAV_HEIGHT_OVERRIDE=""
+BAYLANDS_DEFAULT_WAYPOINT="parkinglot_west_0"
+BAYLANDS_DEFAULT_NAV2_GOALS="parkinglot_west"
 BAYLANDS_NAV_SPAWN_X="-14.085738068"
 BAYLANDS_NAV_SPAWN_Y="-54.861874768"
 BAYLANDS_NAV_SPAWN_Z="0.100975479"
@@ -57,6 +59,7 @@ GAZEBO_SPAWN_X_OVERRIDE=""
 GAZEBO_SPAWN_Y_OVERRIDE=""
 GAZEBO_SPAWN_Z_OVERRIDE=""
 GAZEBO_SPAWN_YAW_OVERRIDE=""
+HAVE_UGV_GOAL_SEQUENCE="false"
 SPAWN_ARGS=()
 FOLLOW_ARGS=()
 GAZEBO_ARGS=()
@@ -277,7 +280,19 @@ for arg in "$@"; do
       SPAWN_ARGS+=("$arg")
       FOLLOW_ARGS+=("$arg")
       ;;
-    follow_yaw:=*|pan_enable:=*|use_tilt:=*|tilt_enable:=*|camera_default_tilt_deg:=*|use_actual_heading:=*|leader_actual_heading_enable:=*|leader_actual_heading_topic:=*|leader_actual_pose_enable:=*|camera_actual_pose_reacquire_enable:=*|publish_follow_debug_topics:=*|publish_pose_cmd_topics:=*|publish_camera_debug_topics:=*|ugv_goal_sequence_file:=*|goal_sequence_file:=*|ugv_goal_sequence_csv:=*|goal_sequence_csv:=*|ugv_goal_sequence_randomize:=*|ugv_goal_sequence_random_reverse:=*|ugv_goal_sequence_relative_to_current_pose:=*)
+    goal_sequence_file:=*)
+      HAVE_UGV_GOAL_SEQUENCE="true"
+      FOLLOW_ARGS+=("nav2_goals:=${arg#goal_sequence_file:=}")
+      ;;
+    goal_sequence_csv:=*)
+      HAVE_UGV_GOAL_SEQUENCE="true"
+      FOLLOW_ARGS+=("ugv_goal_sequence_csv:=${arg#goal_sequence_csv:=}")
+      ;;
+    nav2_goals:=*|ugv_goal_sequence_file:=*|ugv_goal_sequence_csv:=*)
+      HAVE_UGV_GOAL_SEQUENCE="true"
+      FOLLOW_ARGS+=("$arg")
+      ;;
+    follow_yaw:=*|pan_enable:=*|use_tilt:=*|tilt_enable:=*|camera_default_tilt_deg:=*|use_actual_heading:=*|leader_actual_heading_enable:=*|leader_actual_heading_topic:=*|leader_actual_pose_enable:=*|camera_actual_pose_reacquire_enable:=*|publish_follow_debug_topics:=*|publish_pose_cmd_topics:=*|publish_camera_debug_topics:=*|ugv_goal_sequence_randomize:=*|ugv_goal_sequence_random_reverse:=*|ugv_goal_sequence_relative_to_current_pose:=*)
       FOLLOW_ARGS+=("$arg")
       ;;
     weights:=*|target:=*|use_estimate:=*|obb:=*|folder:=*|dir:=*|subdir:=*|tracker:=*|external_detection_node:=*|tracker_config:=*|yolo_device:=*|device:=*|detector_backend:=*|detector_async_inference:=*|detector_onnx_model:=*|range_mode:=*|leader_range_mode:=*|ugv_start_delay_s:=*|start_visual_follow_controller:=*|start_visual_follow_point_generator:=*|start_visual_follow_planner:=*|start_visual_actuation_bridge:=*|leader_selected_target_topic:=*|leader_selected_target_filtered_topic:=*|leader_selected_target_filtered_status_topic:=*|leader_visual_target_estimate_topic:=*|leader_visual_target_estimate_status_topic:=*|leader_follow_point_topic:=*|leader_follow_point_status_topic:=*|leader_planned_target_topic:=*|leader_planned_target_status_topic:=*|leader_visual_control_topic:=*|leader_visual_control_status_topic:=*|leader_visual_actuation_bridge_status_topic:=*)
@@ -325,7 +340,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "Unknown argument: $arg" >&2
-      echo "Usage: $0 [world] [mode:=follow|yolo] [record:=true|false] [record_profile:=default|step2_light|vision] [record_tag:=name] [record_out:=bags/experiments/...] [camera:=attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [use_actual_heading:=true|false] [leader_actual_pose_enable:=true|false] [camera_actual_pose_reacquire_enable:=true|false] [publish_follow_debug_topics:=true|false] [publish_pose_cmd_topics:=true|false] [publish_camera_debug_topics:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [obb:=true|false] [tracker:=true|false] [external_detection_node:=detector|tracker] [tracker_config:=botsort.yaml] [detector_backend:=ultralytics|onnx_cpu|onnx_directml] [detector_async_inference:=true|false] [yolo_device:=cpu|auto] [detector_onnx_model:=...] [ugv_start_delay_s:=12.0] [start_visual_actuation_bridge:=true|false] [start_visual_follow_point_generator:=true|false] [start_visual_follow_planner:=true|false] [start_visual_follow_controller:=true|false] [ugv_goal_sequence_file:=/path/route.yaml] [ugv_goal_sequence_csv:=x,y,yaw;...] [ugv_goal_sequence_randomize:=true|false] [ugv_goal_sequence_random_reverse:=true|false] [ugv_goal_sequence_relative_to_current_pose:=true|false] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [rtf:=1.0] [x:=...] [y:=...] [z:=...] [yaw:=...] [state:=checkpoint] [waypoint:=name] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [record_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes] [omnet:=true|false] [omnet_network:=wifi|5g|lora] [omnet_ui:=cmdenv|qtenv] [omnet_project:=/path/UAV_UGV] [omnet_result_dir:=/path] [omnet_bridge_port:=5555] [omnet_start_delay_s:=3.0] [ugv_start_delay_s:=3.0] [uav_start_delay_s:=12.0]" >&2
+      echo "Usage: $0 [world] [mode:=follow|yolo] [record:=true|false] [record_profile:=default|step2_light|vision] [record_tag:=name] [record_out:=bags/experiments/...] [camera:=attached] [follow_yaw:=true|false] [pan_enable:=true|false] [use_tilt:=true|false] [use_actual_heading:=true|false] [leader_actual_pose_enable:=true|false] [camera_actual_pose_reacquire_enable:=true|false] [publish_follow_debug_topics:=true|false] [publish_pose_cmd_topics:=true|false] [publish_camera_debug_topics:=true|false] [height:=7] [mount_pitch_deg:=45] [uav_name:=dji0] [weights:=...] [target:=...] [use_estimate:=true|false] [obb:=true|false] [tracker:=true|false] [external_detection_node:=detector|tracker] [tracker_config:=botsort.yaml] [detector_backend:=ultralytics|onnx_cpu|onnx_directml] [detector_async_inference:=true|false] [yolo_device:=cpu|auto] [detector_onnx_model:=...] [ugv_start_delay_s:=12.0] [start_visual_actuation_bridge:=true|false] [start_visual_follow_point_generator:=true|false] [start_visual_follow_planner:=true|false] [start_visual_follow_controller:=true|false] [nav2_goals:=parkinglot_east|route.yaml] [ugv_goal_sequence_csv:=x,y,yaw;...] [ugv_goal_sequence_randomize:=true|false] [ugv_goal_sequence_random_reverse:=true|false] [ugv_goal_sequence_relative_to_current_pose:=true|false] [folder:=...] [map:=/path/map.yaml] [gui:=true|false] [rtf:=1.0] [x:=...] [y:=...] [z:=...] [yaw:=...] [state:=checkpoint] [waypoint:=name] [delay_s:=9] [spawn_delay_s:=9] [localization_delay_s:=11] [nav2_delay_s:=11] [follow_delay_s:=13] [record_delay_s:=13] [session:=name] [tmux_attach:=true|false] [dry_run:=true|false] [layout:=windows|panes] [omnet:=true|false] [omnet_network:=wifi|5g|lora] [omnet_ui:=cmdenv|qtenv] [omnet_project:=/path/UAV_UGV] [omnet_result_dir:=/path] [omnet_bridge_port:=5555] [omnet_start_delay_s:=3.0] [ugv_start_delay_s:=3.0] [uav_start_delay_s:=12.0]" >&2
       exit 2
       ;;
   esac
@@ -418,10 +433,10 @@ apply_default_delays() {
   if [[ "$WORLD" == baylands* ]]; then
     # Baylands needs a bit more time for Gazebo startup/spawn settling before we
     # derive the UAV-relative spawn and start the rest of the stack.
-    SPAWN_DELAY_S=$((SPAWN_DELAY_S + 2))
+    SPAWN_DELAY_S=$((SPAWN_DELAY_S + 8))
     LOCALIZATION_DELAY_S=$((LOCALIZATION_DELAY_S + 2))
     NAV2_DELAY_S="$LOCALIZATION_DELAY_S"
-    FOLLOW_DELAY_S=$((FOLLOW_DELAY_S + 2))
+    FOLLOW_DELAY_S=$((SPAWN_DELAY_S + 2))
     RECORD_DELAY_S="$FOLLOW_DELAY_S"
   fi
 
@@ -623,14 +638,16 @@ else
   FOLLOW_ARGS+=("uav_start_delay_s:=$DEFAULT_UAV_START_DELAY_S")
 fi
 
+if [[ "$WORLD" == baylands* ]] && [ "$HAVE_UGV_GOAL_SEQUENCE" = "false" ]; then
+  FOLLOW_ARGS+=("nav2_goals:=$BAYLANDS_DEFAULT_NAV2_GOALS")
+  echo "[run_tmux_1to1] Baylands default Nav2 goals: nav2_goals:=$BAYLANDS_DEFAULT_NAV2_GOALS"
+fi
+
 if [[ "$WORLD" == baylands* ]] && [ "$HAS_GAZEBO_SPAWN_OVERRIDE" = "false" ]; then
-  GAZEBO_ARGS+=(
-    "x:=$BAYLANDS_NAV_SPAWN_X"
-    "y:=$BAYLANDS_NAV_SPAWN_Y"
-    "z:=$BAYLANDS_NAV_SPAWN_Z"
-    "yaw:=$BAYLANDS_NAV_SPAWN_YAW"
-  )
-  echo "[run_tmux_1to1] Baylands detected: using navigation-ready UGV spawn x=${BAYLANDS_NAV_SPAWN_X} y=${BAYLANDS_NAV_SPAWN_Y} z=${BAYLANDS_NAV_SPAWN_Z} yaw=${BAYLANDS_NAV_SPAWN_YAW}"
+  GAZEBO_WAYPOINT_NAME="$BAYLANDS_DEFAULT_WAYPOINT"
+  HAS_GAZEBO_SPAWN_OVERRIDE="true"
+  GAZEBO_ARGS+=("waypoint:=$GAZEBO_WAYPOINT_NAME")
+  echo "[run_tmux_1to1] Baylands default UGV spawn waypoint: waypoint:=$GAZEBO_WAYPOINT_NAME"
 fi
 
 UGV_SPAWN_X=""
@@ -690,13 +707,18 @@ if [ -n "$UGV_SPAWN_X" ] && [ -n "$UGV_SPAWN_Y" ] && [ -n "$UGV_SPAWN_YAW" ]; th
   }
   eval "$UAV_SPAWN_ENV"
   SPAWN_ARGS+=("x:=$uav_x" "y:=$uav_y" "z:=$uav_z" "yaw:=$uav_yaw")
-  FOLLOW_ARGS+=(
-    "uav_start_x:=$uav_x"
-    "uav_start_y:=$uav_y"
-    "uav_start_z:=$uav_z"
-    "uav_start_yaw_deg:=$uav_yaw_deg"
-  )
+  if [[ "$WORLD" != baylands* ]]; then
+    FOLLOW_ARGS+=(
+      "uav_start_x:=$uav_x"
+      "uav_start_y:=$uav_y"
+      "uav_start_z:=$uav_z"
+      "uav_start_yaw_deg:=$uav_yaw_deg"
+    )
+  fi
   echo "[run_tmux_1to1] Using deterministic UAV spawn from UGV spawn x=${UGV_SPAWN_X} y=${UGV_SPAWN_Y} yaw=${UGV_SPAWN_YAW}: uav_x=${uav_x} uav_y=${uav_y} uav_z=${uav_z} uav_yaw_deg=${uav_yaw_deg}"
+  if [[ "$WORLD" == baylands* ]]; then
+    echo "[run_tmux_1to1] Baylands follow start will be resolved from the live UAV pose by run_1to1_follow."
+  fi
 fi
 
 GAZEBO_CMD=(./run.sh gazebo_sim "$WORLD")
